@@ -4,6 +4,7 @@ import { fetchHealth, fetchPresets, generateCity, generateCityStaged } from './a
 import { drawStageScene, type LayerToggles } from './render/stageRenderer';
 import { heightGridToImageData } from './render/terrainImage';
 import { clampScale, screenToWorld, worldToScreen, type Viewport } from './render/viewport';
+import { TerrainScene } from './render3d/TerrainScene';
 import { TimelinePlayer } from './timeline/TimelinePlayer';
 import { composeFallbackStagedResponse } from './timeline/stageComposer';
 import { useTimelinePlayer } from './timeline/useTimelinePlayer';
@@ -25,6 +26,7 @@ const defaultConfig: GenerateConfig = {
 };
 
 const TIMELINE_TOTAL_MS = 20_000;
+const USE_THREE_TERRAIN = true;
 
 type StageSource = 'none' | 'staged' | 'fallback';
 
@@ -49,6 +51,10 @@ export default function App() {
     terrain: true,
     rivers: true,
     roads: true,
+    contours: true,
+    blocks: true,
+    parcels: true,
+    pedestrianPaths: true,
     debugCandidates: false,
     labels: true,
     analysis: true,
@@ -131,9 +137,10 @@ export default function App() {
       stage: currentStage,
       viewport,
       terrainBitmap,
-      layers,
+      layers: USE_THREE_TERRAIN ? { ...layers, terrain: false } : layers,
       nowMs: timeline.currentTimeMs,
       reducedMotion,
+      transparentBackground: USE_THREE_TERRAIN,
     });
   };
 
@@ -163,9 +170,10 @@ export default function App() {
         stage: currentStage,
         viewport,
         terrainBitmap,
-        layers,
+        layers: USE_THREE_TERRAIN ? { ...layers, terrain: false } : layers,
         nowMs: timeline.currentTimeMs,
         reducedMotion,
+        transparentBackground: USE_THREE_TERRAIN,
       });
     };
 
@@ -320,6 +328,7 @@ export default function App() {
         </div>
 
         <div ref={wrapperRef} className="canvas-stage hud-frame">
+          <TerrainScene artifact={artifact} viewport={viewport} visible={USE_THREE_TERRAIN && layers.terrain} />
           <canvas
             ref={canvasRef}
             onPointerDown={handlePointerDown}

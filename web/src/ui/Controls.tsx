@@ -13,6 +13,10 @@ type Props = {
     terrain: boolean;
     rivers: boolean;
     roads: boolean;
+    contours: boolean;
+    blocks: boolean;
+    parcels: boolean;
+    pedestrianPaths: boolean;
     debugCandidates: boolean;
     labels: boolean;
     analysis: boolean;
@@ -28,6 +32,10 @@ const LAYER_LABELS: Record<string, string> = {
   terrain: 'Terrain',
   rivers: 'Rivers',
   roads: 'Roads',
+  contours: 'Contours',
+  blocks: 'Blocks',
+  parcels: 'Parcels',
+  pedestrianPaths: 'Ped Paths',
   debugCandidates: 'Candidate Edges',
   labels: 'Labels',
   analysis: 'Analysis Heatmaps',
@@ -53,7 +61,7 @@ export function Controls({
     <aside className="panel controls-panel">
       <div className="panel-header">
         <h1>GeoAI Urban Sandbox</h1>
-        <p>MVP: deterministic terrain + rivers + hubs + road skeleton</p>
+        <p>MVP: terrain classes + river areas + road hierarchy + parcel blocks</p>
       </div>
 
       <div className="section">

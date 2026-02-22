@@ -32,6 +32,8 @@ class BuiltRoadEdge:
     weight: float
     length_m: float
     river_crossings: int
+    width_m: float = 8.0
+    render_order: int = 1
 
 
 @dataclass
@@ -328,6 +330,8 @@ def _generate_branches(
                 weight=float(best[0]),
                 length_m=current_pos.distance_to(next_pos),
                 river_crossings=river_cross,
+                width_m=8.0,
+                render_order=1,
             )
             edges.append(edge)
             node_lookup[new_id] = nodes[-1]
@@ -387,6 +391,8 @@ def _dedupe_and_snap(
                 weight=edge.weight,
                 length_m=edge.length_m,
                 river_crossings=edge.river_crossings,
+                width_m=edge.width_m,
+                render_order=edge.render_order,
             )
         )
 
@@ -504,6 +510,8 @@ def generate_roads(
                 weight=float(data.get("weight", 0.0)),
                 length_m=float(data.get("length_m", 0.0)),
                 river_crossings=int(data.get("river_crossings", 0)),
+                width_m=18.0,
+                render_order=0,
             )
         )
 

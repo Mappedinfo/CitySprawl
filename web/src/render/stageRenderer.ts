@@ -1,4 +1,4 @@
-import type { CityArtifact, ResourceSite, StageArtifact } from '../types/city';
+import type { CityArtifact, LandBlock, ParcelLot, PedestrianPath, ResourceSite, StageArtifact } from '../types/city';
 import { drawCity, type LayerFlags } from './cityRenderer';
 import { drawBuildingFootprints, drawGreenZones } from './finalPreview';
 import { drawTrafficFlows } from './trafficAnimation';
@@ -8,6 +8,10 @@ export type LayerToggles = {
   terrain: boolean;
   rivers: boolean;
   roads: boolean;
+  contours: boolean;
+  blocks: boolean;
+  parcels: boolean;
+  pedestrianPaths: boolean;
   debugCandidates: boolean;
   labels: boolean;
   analysis: boolean;
@@ -26,6 +30,7 @@ type Params = {
   layers: LayerToggles;
   nowMs: number;
   reducedMotion: boolean;
+  transparentBackground?: boolean;
 };
 
 function hasStageLayer(stage: StageArtifact | null, key: string): boolean {
@@ -105,7 +110,123 @@ function drawResources(ctx: CanvasRenderingContext2D, artifact: CityArtifact, si
   ctx.restore();
 }
 
-export function drawStageScene({ ctx, artifact, stage, viewport, terrainBitmap, layers, nowMs, reducedMotion }: Params): void {
+function drawContours(ctx: CanvasRenderingContext2D, artifact: CityArtifact, stage: StageArtifact, viewport: Viewport): void {
+  const contours = stage.layers.contour_lines ?? artifact.terrain.contours ?? [];
+  if (!contours.length) return;
+  const extent = artifact.terrain.extent_m;
+  const { width, height } = ctx.canvas;
+  ctx.save();
+  for (const contour of contours) {
+    if (!contour.points?.length || contour.points.length < 2) continue;
+    const e = Math.max(0, Math.min(1, contour.elevation_norm ?? 0.5));
+    ctx.strokeStyle = `rgba(126, 220, 255, ${0.08 + e * 0.16})`;
+    ctx.lineWidth = 0.5 + e * 0.4;
+    ctx.beginPath();
+    contour.points.forEach((pt, i) => {
+      const p = worldToScreen(pt.x, pt.y, extent, width, height, viewport);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function parcelColor(kind: string): string {
+  switch (kind) {
+    case 'commercial_candidate':
+      return 'rgba(255, 196, 89, 0.16)';
+    case 'industrial_candidate':
+      return 'rgba(255, 126, 94, 0.18)';
+    case 'green_candidate':
+      return 'rgba(92, 240, 160, 0.14)';
+    case 'public_facility_candidate':
+      return 'rgba(170, 184, 255, 0.16)';
+    default:
+      return 'rgba(118, 220, 255, 0.12)';
+  }
+}
+
+function drawPolygonList(
+  ctx: CanvasRenderingContext2D,
+  artifact: CityArtifact,
+  polygons: Array<{ points: { x: number; y: number }[] }>,
+  viewport: Viewport,
+  fillStyle: ((index: number) => string) | string,
+  strokeStyle: string,
+  lineWidth = 0.8,
+): void {
+  if (!polygons.length) return;
+  const extent = artifact.terrain.extent_m;
+  const { width, height } = ctx.canvas;
+  ctx.save();
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = strokeStyle;
+  polygons.forEach((poly, idx) => {
+    if (!poly.points?.length || poly.points.length < 3) return;
+    ctx.beginPath();
+    poly.points.forEach((pt, i) => {
+      const p = worldToScreen(pt.x, pt.y, extent, width, height, viewport);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = typeof fillStyle === 'string' ? fillStyle : fillStyle(idx);
+    ctx.fill();
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function drawParcelLots(ctx: CanvasRenderingContext2D, artifact: CityArtifact, parcels: ParcelLot[], viewport: Viewport): void {
+  drawPolygonList(
+    ctx,
+    artifact,
+    parcels,
+    viewport,
+    (idx) => parcelColor(parcels[idx]?.parcel_class ?? 'residential_candidate'),
+    'rgba(140, 205, 235, 0.22)',
+    0.5,
+  );
+}
+
+function drawLandBlocks(ctx: CanvasRenderingContext2D, artifact: CityArtifact, blocks: LandBlock[], viewport: Viewport): void {
+  drawPolygonList(ctx, artifact, blocks, viewport, 'rgba(0,0,0,0)', 'rgba(226, 242, 255, 0.28)', 0.9);
+}
+
+function drawPedestrianPaths(ctx: CanvasRenderingContext2D, artifact: CityArtifact, paths: PedestrianPath[], viewport: Viewport): void {
+  if (!paths.length) return;
+  const extent = artifact.terrain.extent_m;
+  const { width, height } = ctx.canvas;
+  const worldScale = (width / Math.max(extent, 1)) * viewport.scale;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(116, 226, 255, 0.58)';
+  ctx.lineCap = 'round';
+  for (const path of paths) {
+    if (!path.points?.length || path.points.length < 2) continue;
+    ctx.lineWidth = Math.max(0.6, ((path.width_m ?? 3) * worldScale) / 9);
+    ctx.beginPath();
+    path.points.forEach((pt, i) => {
+      const p = worldToScreen(pt.x, pt.y, extent, width, height, viewport);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+export function drawStageScene({
+  ctx,
+  artifact,
+  stage,
+  viewport,
+  terrainBitmap,
+  layers,
+  nowMs,
+  reducedMotion,
+  transparentBackground,
+}: Params): void {
   if (!artifact) {
     drawCity(ctx, artifact, viewport, terrainBitmap, {
       terrain: false,
@@ -118,12 +239,17 @@ export function drawStageScene({ ctx, artifact, stage, viewport, terrainBitmap, 
 
   const baseLayers: LayerFlags = {
     terrain: layers.terrain && (!stage || hasStageLayer(stage, 'terrain')),
-    rivers: layers.rivers && (!stage || hasStageLayer(stage, 'rivers')),
+    rivers: layers.rivers && (!stage || hasStageLayer(stage, 'rivers') || hasStageLayer(stage, 'river_areas')),
     roads: layers.roads && (!stage || hasStageLayer(stage, 'roads')),
     debugCandidates: layers.debugCandidates && stage?.stage_id === 'infrastructure',
+    transparentBackground,
   };
 
   drawCity(ctx, artifact, viewport, terrainBitmap, baseLayers);
+
+  if (stage && layers.contours && hasStageLayer(stage, 'contours')) {
+    drawContours(ctx, artifact, stage, viewport);
+  }
 
   if (stage && layers.analysis && hasStageLayer(stage, 'analysis_heatmaps')) {
     const analysis = stage.layers;
@@ -134,6 +260,18 @@ export function drawStageScene({ ctx, artifact, stage, viewport, terrainBitmap, 
 
   if (stage && layers.greenZones && hasStageLayer(stage, 'green_zones') && stage.layers.green_zones_preview) {
     drawGreenZones(ctx, artifact, stage.layers.green_zones_preview, viewport);
+  }
+
+  if (stage && layers.blocks && hasStageLayer(stage, 'blocks') && stage.layers.land_blocks) {
+    drawLandBlocks(ctx, artifact, stage.layers.land_blocks, viewport);
+  }
+
+  if (stage && layers.parcels && hasStageLayer(stage, 'parcels') && stage.layers.parcel_lots) {
+    drawParcelLots(ctx, artifact, stage.layers.parcel_lots, viewport);
+  }
+
+  if (stage && layers.pedestrianPaths && hasStageLayer(stage, 'pedestrian_paths') && stage.layers.pedestrian_paths) {
+    drawPedestrianPaths(ctx, artifact, stage.layers.pedestrian_paths, viewport);
   }
 
   if (stage && layers.buildings && hasStageLayer(stage, 'buildings') && stage.layers.building_footprints) {

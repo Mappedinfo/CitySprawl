@@ -33,6 +33,11 @@ export type Point2D = { x: number; y: number };
 
 export type Polyline2D = { id: string; points: Point2D[] };
 export type Polygon2D = { id: string; points: Point2D[] };
+export type ContourLine = Polyline2D & { elevation_norm: number };
+export type RiverAreaPolygon = Polygon2D & { flow: number; width_mean_m: number; is_main_stem: boolean };
+export type PedestrianPath = Polyline2D & { width_m: number; parent_block_id?: string | null };
+export type LandBlock = Polygon2D & { block_class: string; area_m2: number; parent_id?: string | null };
+export type ParcelLot = Polygon2D & { parcel_class: string; area_m2: number; parent_block_id?: string | null };
 
 export type RiverLine = {
   id: string;
@@ -66,6 +71,8 @@ export type RoadEdgeRecord = {
   weight: number;
   length_m: number;
   river_crossings: number;
+  width_m: number;
+  render_order: number;
 };
 
 export type ResourceSite = {
@@ -105,13 +112,20 @@ export type CityArtifact = {
     display_resolution: number;
     heights: number[][];
     slope_preview?: number[][] | null;
+    terrain_class_preview?: number[][] | null;
+    hillshade_preview?: number[][] | null;
+    contours?: ContourLine[];
   };
   rivers: RiverLine[];
+  river_areas?: RiverAreaPolygon[];
   hubs: HubRecord[];
   roads: {
     nodes: RoadNodeRecord[];
     edges: RoadEdgeRecord[];
   };
+  pedestrian_paths?: PedestrianPath[];
+  blocks?: LandBlock[];
+  parcels?: ParcelLot[];
   metrics: {
     hub_count: number;
     road_node_count: number;
@@ -140,11 +154,18 @@ export type StageCaption = {
 };
 
 export type StageLayersSnapshot = {
+  terrain_class_preview?: number[][] | null;
+  hillshade_preview?: number[][] | null;
+  contour_lines?: ContourLine[];
+  river_area_polygons?: RiverAreaPolygon[];
   suitability_preview?: number[][] | null;
   flood_risk_preview?: number[][] | null;
   population_potential_preview?: number[][] | null;
   resource_sites?: ResourceSite[];
   traffic_edge_flows?: TrafficEdgeFlow[];
+  pedestrian_paths?: PedestrianPath[];
+  land_blocks?: LandBlock[];
+  parcel_lots?: ParcelLot[];
   building_footprints?: BuildingFootprint[];
   green_zones_preview?: number[][] | null;
 };

@@ -8,7 +8,7 @@ STAGE_SPECS = [
         'subtitle': 'Complex terrain and hydrology baseline',
         'subtitle_zh': '复杂地形与水文基底',
         'timestamp_ms': 0,
-        'visible_layers': ['terrain', 'rivers'],
+        'visible_layers': ['terrain', 'rivers', 'river_areas', 'contours'],
     },
     {
         'stage_id': 'analysis',
@@ -17,7 +17,7 @@ STAGE_SPECS = [
         'subtitle': 'Identifying habitable areas and allocating resources',
         'subtitle_zh': '识别宜居区域并配置资源',
         'timestamp_ms': 3000,
-        'visible_layers': ['terrain', 'rivers', 'analysis_heatmaps', 'resources'],
+        'visible_layers': ['terrain', 'rivers', 'river_areas', 'contours', 'analysis_heatmaps', 'resources'],
     },
     {
         'stage_id': 'infrastructure',
@@ -26,7 +26,7 @@ STAGE_SPECS = [
         'subtitle': 'Road network generation and bridge placement',
         'subtitle_zh': '道路网络生成与桥梁布设',
         'timestamp_ms': 7000,
-        'visible_layers': ['terrain', 'rivers', 'roads', 'hubs', 'labels'],
+        'visible_layers': ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'labels'],
     },
     {
         'stage_id': 'traffic',
@@ -35,7 +35,7 @@ STAGE_SPECS = [
         'subtitle': 'OD flow assignment and congestion preview',
         'subtitle_zh': 'OD流量分配与拥堵预览',
         'timestamp_ms': 11000,
-        'visible_layers': ['terrain', 'rivers', 'roads', 'hubs', 'traffic_heat'],
+        'visible_layers': ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'traffic_heat'],
     },
     {
         'stage_id': 'final_preview',
@@ -44,6 +44,19 @@ STAGE_SPECS = [
         'subtitle': 'Composite city preview with buildings and green zones',
         'subtitle_zh': '带建筑与绿地的城市合成预览',
         'timestamp_ms': 15000,
-        'visible_layers': ['terrain', 'rivers', 'roads', 'hubs', 'labels', 'buildings', 'green_zones'],
+        'visible_layers': [
+            'terrain',
+            'rivers',
+            'river_areas',
+            'contours',
+            'roads',
+            'hubs',
+            'labels',
+            'pedestrian_paths',
+            'blocks',
+            'parcels',
+            'buildings',
+            'green_zones',
+        ],
     },
 ]

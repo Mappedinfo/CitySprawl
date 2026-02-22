@@ -7,8 +7,13 @@ import numpy as np
 from engine.models import (
     BuildingFootprint,
     CityArtifact,
+    ContourLine,
+    LandBlock,
+    ParcelLot,
+    PedestrianPath,
     Point2D,
     ResourceSite,
+    RiverAreaPolygon,
     StageArtifact,
     StageCaption,
     StageLayersSnapshot,
@@ -107,6 +112,13 @@ def build_stages(
     traffic_edge_flows: Sequence[TrafficEdgeFlow],
     building_footprints: Sequence[BuildingFootprint],
     green_zones_preview: np.ndarray,
+    terrain_class_preview: np.ndarray,
+    hillshade_preview: np.ndarray,
+    contour_lines: Sequence[ContourLine],
+    river_area_polygons: Sequence[RiverAreaPolygon],
+    pedestrian_paths: Sequence[PedestrianPath],
+    land_blocks: Sequence[LandBlock],
+    parcel_lots: Sequence[ParcelLot],
 ) -> List[StageArtifact]:
     stages: List[StageArtifact] = []
 
@@ -124,8 +136,27 @@ def build_stages(
         layers = StageLayersSnapshot()
         metrics: Dict[str, Any] = {}
 
-        if stage_id == 'analysis':
+        if stage_id == 'terrain':
             layers = StageLayersSnapshot(
+                terrain_class_preview=np.asarray(terrain_class_preview, dtype=np.int64).tolist()
+                if np.asarray(terrain_class_preview).size
+                else None,
+                hillshade_preview=_grid_to_list(hillshade_preview),
+                contour_lines=list(contour_lines),
+                river_area_polygons=list(river_area_polygons),
+            )
+            metrics = {
+                'river_area_count': len(river_area_polygons),
+                'contour_count': len(contour_lines),
+            }
+        elif stage_id == 'analysis':
+            layers = StageLayersSnapshot(
+                terrain_class_preview=np.asarray(terrain_class_preview, dtype=np.int64).tolist()
+                if np.asarray(terrain_class_preview).size
+                else None,
+                hillshade_preview=_grid_to_list(hillshade_preview),
+                contour_lines=list(contour_lines),
+                river_area_polygons=list(river_area_polygons),
                 suitability_preview=_grid_to_list(suitability_preview),
                 flood_risk_preview=_grid_to_list(flood_risk_preview),
                 population_potential_preview=_grid_to_list(population_potential_preview),
@@ -136,16 +167,28 @@ def build_stages(
                 'mean_suitability': float(np.mean(suitability_preview)) if suitability_preview.size else 0.0,
             }
         elif stage_id == 'traffic':
-            layers = StageLayersSnapshot(traffic_edge_flows=list(traffic_edge_flows))
+            layers = StageLayersSnapshot(
+                contour_lines=list(contour_lines),
+                river_area_polygons=list(river_area_polygons),
+                traffic_edge_flows=list(traffic_edge_flows),
+            )
             metrics = traffic_metrics
         elif stage_id == 'final_preview':
             layers = StageLayersSnapshot(
+                contour_lines=list(contour_lines),
+                river_area_polygons=list(river_area_polygons),
+                pedestrian_paths=list(pedestrian_paths),
+                land_blocks=list(land_blocks),
+                parcel_lots=list(parcel_lots),
                 building_footprints=list(building_footprints),
                 green_zones_preview=_grid_to_list(green_zones_preview),
             )
             metrics = final_metrics
         else:
-            layers = StageLayersSnapshot()
+            layers = StageLayersSnapshot(
+                contour_lines=list(contour_lines),
+                river_area_polygons=list(river_area_polygons),
+            )
             metrics = {
                 'road_edge_count': final_artifact.metrics.road_edge_count,
                 'river_count': final_artifact.metrics.river_count,

@@ -15,7 +15,7 @@ const STAGE_TEMPLATES: Array<Omit<StageArtifact, 'layers' | 'metrics'>> = [
     subtitle: 'Complex terrain and hydrology baseline',
     subtitle_zh: '复杂地形与水文基底',
     timestamp_ms: 0,
-    visible_layers: ['terrain', 'rivers'],
+    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours'],
     caption: { text: 'Complex terrain input', text_zh: '复杂地形输入' },
   },
   {
@@ -25,7 +25,7 @@ const STAGE_TEMPLATES: Array<Omit<StageArtifact, 'layers' | 'metrics'>> = [
     subtitle: 'Identifying habitable areas and allocating resources',
     subtitle_zh: '识别宜居区域并配置资源',
     timestamp_ms: 3000,
-    visible_layers: ['terrain', 'rivers', 'analysis_heatmaps', 'resources'],
+    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours', 'analysis_heatmaps', 'resources'],
     caption: { text: 'Identifying habitable areas', text_zh: '识别宜居区域' },
   },
   {
@@ -35,7 +35,7 @@ const STAGE_TEMPLATES: Array<Omit<StageArtifact, 'layers' | 'metrics'>> = [
     subtitle: 'Road network generation and bridge placement',
     subtitle_zh: '道路网络生成与桥梁布设',
     timestamp_ms: 7000,
-    visible_layers: ['terrain', 'rivers', 'roads', 'hubs', 'labels'],
+    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'labels'],
     caption: { text: 'Mapping infrastructure', text_zh: '基础设施规划中' },
   },
   {
@@ -45,7 +45,7 @@ const STAGE_TEMPLATES: Array<Omit<StageArtifact, 'layers' | 'metrics'>> = [
     subtitle: 'OD flow assignment preview',
     subtitle_zh: 'OD流量分配预览',
     timestamp_ms: 11000,
-    visible_layers: ['terrain', 'rivers', 'roads', 'hubs', 'traffic_heat'],
+    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'traffic_heat'],
     caption: { text: 'Simulating traffic', text_zh: '交通模拟中' },
   },
   {
@@ -55,7 +55,7 @@ const STAGE_TEMPLATES: Array<Omit<StageArtifact, 'layers' | 'metrics'>> = [
     subtitle: 'Composite preview with buildings and green zones',
     subtitle_zh: '带建筑与绿地的合成预览',
     timestamp_ms: 15000,
-    visible_layers: ['terrain', 'rivers', 'roads', 'hubs', 'labels', 'buildings', 'green_zones'],
+    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'labels', 'pedestrian_paths', 'blocks', 'parcels', 'buildings', 'green_zones'],
     caption: { text: 'High-quality city preview generated', text_zh: '高质量城市预览已生成' },
   },
 ];
@@ -185,10 +185,23 @@ export function composeFallbackStagedResponse(artifact: CityArtifact): StagedCit
   const green = pseudoGreenZones(artifact);
 
   const stages: StageArtifact[] = STAGE_TEMPLATES.map((base) => {
-    let layers = {} as StageArtifact['layers'];
+    let layers: StageArtifact['layers'] = {
+      contour_lines: artifact.terrain.contours,
+      river_area_polygons: artifact.river_areas,
+    };
     let metrics: StageArtifact['metrics'] = {};
-    if (base.stage_id === 'analysis') {
+    if (base.stage_id === 'terrain') {
       layers = {
+        ...layers,
+        terrain_class_preview: artifact.terrain.terrain_class_preview,
+        hillshade_preview: artifact.terrain.hillshade_preview,
+      };
+      metrics = { road_edge_count: artifact.metrics.road_edge_count };
+    } else if (base.stage_id === 'analysis') {
+      layers = {
+        ...layers,
+        terrain_class_preview: artifact.terrain.terrain_class_preview,
+        hillshade_preview: artifact.terrain.hillshade_preview,
         suitability_preview: suitability,
         flood_risk_preview: flood,
         population_potential_preview: population,
@@ -196,13 +209,19 @@ export function composeFallbackStagedResponse(artifact: CityArtifact): StagedCit
       };
       metrics = { resource_site_count: resources.length };
     } else if (base.stage_id === 'traffic') {
-      layers = { traffic_edge_flows: traffic };
+      layers = { ...layers, traffic_edge_flows: traffic };
       metrics = { max_congestion_ratio: Math.max(0, ...traffic.map((t) => t.congestion_ratio)) };
     } else if (base.stage_id === 'final_preview') {
-      layers = { building_footprints: buildings, green_zones_preview: green };
+      layers = {
+        ...layers,
+        pedestrian_paths: artifact.pedestrian_paths,
+        land_blocks: artifact.blocks,
+        parcel_lots: artifact.parcels,
+        building_footprints: buildings,
+        green_zones_preview: green,
+      };
       metrics = { building_count: buildings.length };
     } else {
-      layers = {};
       metrics = { road_edge_count: artifact.metrics.road_edge_count };
     }
     return { ...base, layers, metrics };

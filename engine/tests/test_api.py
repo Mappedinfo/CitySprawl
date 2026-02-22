@@ -35,6 +35,9 @@ def test_generate_success():
     assert body["meta"]["seed"] == 7
     assert len(body["hubs"]) == 11
     assert "metrics" in body
+    assert "river_areas" in body
+    assert "terrain_class_preview" in body["terrain"]
+    assert all("width_m" in e and "render_order" in e for e in body["roads"]["edges"])
 
 
 def test_generate_staged_success():
@@ -58,7 +61,10 @@ def test_generate_staged_success():
         "traffic",
         "final_preview",
     ]
+    assert body["stages"][0]["layers"]["terrain_class_preview"] is not None
+    assert "river_area_polygons" in body["stages"][0]["layers"]
     assert body["stages"][3]["layers"]["traffic_edge_flows"]
+    assert "land_blocks" in body["stages"][4]["layers"]
 
 
 def test_generate_validation_error():

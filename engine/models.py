@@ -72,12 +72,42 @@ class Polygon2D(StrictModel):
     points: List[Point2D]
 
 
+class ContourLine(Polyline2D):
+    elevation_norm: float = 0.0
+
+
+class RiverAreaPolygon(Polygon2D):
+    flow: float = 0.0
+    width_mean_m: float = 0.0
+    is_main_stem: bool = False
+
+
+class PedestrianPath(Polyline2D):
+    width_m: float = 3.0
+    parent_block_id: Optional[str] = None
+
+
+class LandBlock(Polygon2D):
+    block_class: str = "unclassified"
+    area_m2: float = 0.0
+    parent_id: Optional[str] = None
+
+
+class ParcelLot(Polygon2D):
+    parcel_class: str = "unclassified"
+    area_m2: float = 0.0
+    parent_block_id: Optional[str] = None
+
+
 class TerrainLayer(StrictModel):
     extent_m: float
     resolution: int
     display_resolution: int
     heights: List[List[float]]
     slope_preview: Optional[List[List[float]]] = None
+    terrain_class_preview: Optional[List[List[int]]] = None
+    hillshade_preview: Optional[List[List[float]]] = None
+    contours: List[ContourLine] = Field(default_factory=list)
 
 
 class RiverLine(StrictModel):
@@ -112,6 +142,8 @@ class RoadEdgeRecord(StrictModel):
     weight: float
     length_m: float
     river_crossings: int = 0
+    width_m: float = 8.0
+    render_order: int = 1
 
 
 class RoadNetwork(StrictModel):
@@ -183,8 +215,12 @@ class CityArtifact(StrictModel):
     meta: ArtifactMeta
     terrain: TerrainLayer
     rivers: List[RiverLine]
+    river_areas: List[RiverAreaPolygon] = Field(default_factory=list)
     hubs: List[HubRecord]
     roads: RoadNetwork
+    pedestrian_paths: List[PedestrianPath] = Field(default_factory=list)
+    blocks: List[LandBlock] = Field(default_factory=list)
+    parcels: List[ParcelLot] = Field(default_factory=list)
     metrics: Metrics
     debug_layers: DebugLayers
 
@@ -195,11 +231,18 @@ class StageCaption(StrictModel):
 
 
 class StageLayersSnapshot(StrictModel):
+    terrain_class_preview: Optional[List[List[int]]] = None
+    hillshade_preview: Optional[List[List[float]]] = None
+    contour_lines: List[ContourLine] = Field(default_factory=list)
+    river_area_polygons: List[RiverAreaPolygon] = Field(default_factory=list)
     suitability_preview: Optional[List[List[float]]] = None
     flood_risk_preview: Optional[List[List[float]]] = None
     population_potential_preview: Optional[List[List[float]]] = None
     resource_sites: List[ResourceSite] = Field(default_factory=list)
     traffic_edge_flows: List[TrafficEdgeFlow] = Field(default_factory=list)
+    pedestrian_paths: List[PedestrianPath] = Field(default_factory=list)
+    land_blocks: List[LandBlock] = Field(default_factory=list)
+    parcel_lots: List[ParcelLot] = Field(default_factory=list)
     building_footprints: List[BuildingFootprint] = Field(default_factory=list)
     green_zones_preview: Optional[List[List[float]]] = None
 

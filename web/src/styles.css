@@ -305,12 +305,28 @@ button:disabled {
   height: 100%;
 }
 
+.canvas-stage .terrain-three-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.canvas-stage .terrain-three-layer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .canvas-stage canvas {
   touch-action: none;
+  z-index: 1;
 }
 
 .canvas-stage .overlay {
   pointer-events: auto;
+  z-index: 2;
 }
 
 .hub-label {

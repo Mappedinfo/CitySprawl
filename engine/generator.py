@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
@@ -11,6 +11,11 @@ from engine.analysis import (
     compute_population_potential,
     compute_suitability_and_flood,
     generate_resource_sites,
+)
+from engine.blocks import (
+    classify_blocks_and_parcels,
+    extract_macro_blocks,
+    generate_pedestrian_paths_and_parcels,
 )
 from engine.export.json_export import artifact_to_json
 from engine.hubs import generate_hubs
@@ -21,7 +26,10 @@ from engine.models import (
     DebugSegment,
     GenerateConfig,
     HubRecord,
+    LandBlock,
     Metrics,
+    ParcelLot,
+    PedestrianPath,
     Point2D,
     RiverLine,
     RoadEdgeRecord,
@@ -33,9 +41,13 @@ from engine.models import (
 from engine.naming import assign_hub_names, get_toponymy_provider
 from engine.pydantic_compat import model_dump
 from engine.roads import generate_roads
+from engine.roads.pedestrian import PEDESTRIAN_WIDTH_M
 from engine.staging import build_stages, generate_building_footprints, generate_green_zones_preview
+from engine.terrain.classification import TerrainVisualSurfaces, compute_terrain_classification
+from engine.terrain.contours import extract_contour_lines
 from engine.terrain.generator import generate_terrain_bundle
 from engine.terrain.hydrology import downsample_grid
+from engine.terrain.river_area import build_river_area_polygons
 from engine.traffic import assign_edge_flows
 
 SCHEMA_VERSION = "0.1.0"
@@ -48,11 +60,19 @@ class _CoreGenerationContext:
     road_result: Any
     names: List[str]
     name_map: Dict[str, str]
+    selected_rivers_raw: List[Dict[str, object]]
+    terrain_visuals: TerrainVisualSurfaces
+    contour_lines: List[Any]
+    river_areas: List[Any]
 
 
 def _grid_to_nested_list(grid: np.ndarray, precision: int = 4) -> List[List[float]]:
     rounded = np.round(grid.astype(np.float64), precision)
     return rounded.tolist()
+
+
+def _grid_to_nested_int_list(grid: np.ndarray) -> List[List[int]]:
+    return grid.astype(np.int64).tolist()
 
 
 def _point_model(x: float, y: float) -> Point2D:
@@ -95,6 +115,24 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         seed=config.seed,
     )
 
+    selected_rivers_raw, river_areas = build_river_area_polygons(
+        terrain_bundle.hydrology.river_polylines,
+        max_branches=2,
+    )
+    terrain_visuals = compute_terrain_classification(
+        height=terrain_bundle.height,
+        slope=terrain_bundle.slope,
+        extent_m=config.extent_m,
+        river_polylines=selected_rivers_raw if selected_rivers_raw else terrain_bundle.hydrology.river_polylines,
+        max_resolution=128,
+    )
+    contour_lines = extract_contour_lines(
+        terrain_bundle.height,
+        extent_m=config.extent_m,
+        max_resolution=128,
+        contour_count=12,
+    )
+
     provider = get_toponymy_provider(config.naming.provider)
     road_edges_for_naming = [
         {"u": e.u, "v": e.v, "road_class": e.road_class, "weight": e.weight}
@@ -109,6 +147,10 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         road_result=road_result,
         names=names,
         name_map=name_map,
+        selected_rivers_raw=selected_rivers_raw,
+        terrain_visuals=terrain_visuals,
+        contour_lines=contour_lines,
+        river_areas=river_areas,
     )
 
 
@@ -117,8 +159,8 @@ def _build_city_artifact_from_core(
     ctx: _CoreGenerationContext,
     duration_ms: float,
 ) -> CityArtifact:
-    height_preview = downsample_grid(ctx.terrain_bundle.height, max_resolution=128)
-    slope_preview = downsample_grid(ctx.terrain_bundle.slope, max_resolution=128)
+    height_preview = ctx.terrain_visuals.height_preview
+    slope_preview = ctx.terrain_visuals.slope_preview
     accum_preview = downsample_grid(ctx.terrain_bundle.hydrology.accumulation, max_resolution=128)
     if accum_preview.size:
         accum_preview = accum_preview / (float(np.max(accum_preview)) + 1e-9)
@@ -129,11 +171,22 @@ def _build_city_artifact_from_core(
         display_resolution=int(height_preview.shape[0]),
         heights=_grid_to_nested_list(height_preview, precision=4),
         slope_preview=_grid_to_nested_list(slope_preview, precision=5),
+        terrain_class_preview=_grid_to_nested_int_list(ctx.terrain_visuals.terrain_class_preview),
+        hillshade_preview=_grid_to_nested_list(ctx.terrain_visuals.hillshade_preview, precision=5),
+        contours=list(ctx.contour_lines),
     )
 
     rivers: List[RiverLine] = []
-    for river in ctx.terrain_bundle.hydrology.river_polylines:
-        points = [Point2D(x=float(p.x), y=float(p.y)) for p in river["points"]]
+    source_rivers = ctx.selected_rivers_raw if ctx.selected_rivers_raw else ctx.terrain_bundle.hydrology.river_polylines
+    for river in source_rivers:
+        points = []
+        for p in river["points"]:
+            if isinstance(p, tuple) or isinstance(p, list):
+                points.append(Point2D(x=float(p[0]), y=float(p[1])))
+            elif isinstance(p, dict):
+                points.append(Point2D(x=float(p["x"]), y=float(p["y"])))
+            else:
+                points.append(Point2D(x=float(p.x), y=float(p.y)))
         rivers.append(
             RiverLine(
                 id=str(river["id"]),
@@ -170,6 +223,8 @@ def _build_city_artifact_from_core(
             weight=float(e.weight),
             length_m=float(e.length_m),
             river_crossings=int(e.river_crossings),
+            width_m=float(getattr(e, "width_m", 8.0)),
+            render_order=int(getattr(e, "render_order", 1)),
         )
         for e in ctx.road_result.edges
     ]
@@ -221,11 +276,39 @@ def _build_city_artifact_from_core(
         meta=meta,
         terrain=terrain_model,
         rivers=rivers,
+        river_areas=list(ctx.river_areas),
         hubs=hubs,
         roads=road_network,
         metrics=metrics,
         debug_layers=debug_layers,
     )
+
+
+def _attach_land_use_layers(
+    artifact: CityArtifact,
+    extent_m: float,
+    resource_sites: Sequence[Any],
+    flood_risk_preview: np.ndarray | None,
+) -> Tuple[List[PedestrianPath], List[LandBlock], List[ParcelLot]]:
+    extraction = extract_macro_blocks(extent_m, artifact.roads, artifact.river_areas)
+    parcelization = generate_pedestrian_paths_and_parcels(
+        extraction.macro_blocks,
+        pedestrian_width_m=PEDESTRIAN_WIDTH_M,
+    )
+    blocks, parcels = classify_blocks_and_parcels(
+        extent_m=extent_m,
+        extraction=extraction,
+        parcel_polygons_by_block=parcelization.parcel_polygons_by_block,
+        hubs=artifact.hubs,
+        road_network=artifact.roads,
+        river_areas=artifact.river_areas,
+        resource_sites=resource_sites,
+        flood_risk_preview=flood_risk_preview,
+    )
+    artifact.pedestrian_paths = list(parcelization.pedestrian_paths)
+    artifact.blocks = list(blocks)
+    artifact.parcels = list(parcels)
+    return artifact.pedestrian_paths, artifact.blocks, artifact.parcels
 
 
 def generate_city(config: GenerateConfig) -> CityArtifact:
@@ -262,13 +345,13 @@ def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
         extent_m=config.extent_m,
     )
 
-    provisional_artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
-    traffic_result = assign_edge_flows(provisional_artifact.hubs, provisional_artifact.roads)
+    final_artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
+    traffic_result = assign_edge_flows(final_artifact.hubs, final_artifact.roads)
 
     building_footprints = generate_building_footprints(
         seed=config.seed,
         extent_m=config.extent_m,
-        hubs=provisional_artifact.hubs,
+        hubs=final_artifact.hubs,
         population_potential_preview=population_potential,
         flood_risk_preview=analysis.flood_risk,
     )
@@ -278,8 +361,19 @@ def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
         population_potential_preview=population_potential,
     )
 
+    pedestrian_paths, land_blocks, parcel_lots = _attach_land_use_layers(
+        final_artifact,
+        extent_m=config.extent_m,
+        resource_sites=resource_sites,
+        flood_risk_preview=analysis.flood_risk,
+    )
+
+    duration_ms = (perf_counter() - t0) * 1000.0
+    final_artifact.meta.duration_ms = float(duration_ms)
+    final_artifact.meta.generated_at_utc = datetime.now(timezone.utc).isoformat()
+
     stages = build_stages(
-        final_artifact=provisional_artifact,
+        final_artifact=final_artifact,
         suitability_preview=analysis.suitability,
         flood_risk_preview=analysis.flood_risk,
         population_potential_preview=population_potential,
@@ -287,10 +381,14 @@ def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
         traffic_edge_flows=traffic_result.edge_flows,
         building_footprints=building_footprints,
         green_zones_preview=green_zones_preview,
+        terrain_class_preview=ctx.terrain_visuals.terrain_class_preview,
+        hillshade_preview=ctx.terrain_visuals.hillshade_preview,
+        contour_lines=ctx.contour_lines,
+        river_area_polygons=final_artifact.river_areas,
+        pedestrian_paths=pedestrian_paths,
+        land_blocks=land_blocks,
+        parcel_lots=parcel_lots,
     )
-
-    duration_ms = (perf_counter() - t0) * 1000.0
-    final_artifact = _build_city_artifact_from_core(config, ctx, duration_ms)
     return StagedCityResponse(final_artifact=final_artifact, stages=stages)
 
 
