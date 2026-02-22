@@ -12,10 +12,16 @@ def test_generate_city_staged_returns_five_ordered_stages_with_required_layers()
     assert terrain.layers.hillshade_preview is not None
     assert terrain.layers.contour_lines
     assert terrain.layers.river_area_polygons is not None
+    assert terrain.layers.visual_envelope is not None
+    assert resp.final_artifact.terrain.extent_m == 10000.0
+    assert 0.10 <= resp.final_artifact.metrics.river_coverage_ratio <= 0.30
+    assert resp.final_artifact.visual_envelope is not None
+    assert resp.final_artifact.metrics.visual_envelope_area_ratio is not None
 
     analysis = resp.stages[1]
     assert analysis.layers.suitability_preview is not None
     assert analysis.layers.resource_sites
+    assert analysis.layers.visual_envelope is not None
 
     traffic = resp.stages[3]
     assert traffic.layers.traffic_edge_flows
@@ -25,3 +31,5 @@ def test_generate_city_staged_returns_five_ordered_stages_with_required_layers()
     assert final_stage.layers.green_zones_preview is not None
     assert final_stage.layers.land_blocks is not None
     assert final_stage.layers.parcel_lots is not None
+    assert final_stage.layers.visual_envelope is not None
+    assert any(edge.path_points for edge in resp.final_artifact.roads.edges if edge.road_class in ("arterial", "local"))

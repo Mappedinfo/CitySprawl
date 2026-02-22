@@ -26,6 +26,7 @@ def _poly_to_points(poly: Polygon) -> List[Point2D]:
 
 def _road_unions(road_network: RoadNetwork):
     from engine.blocks.extraction import vehicular_corridor_union
+    from engine.blocks.extraction import _edge_coords
 
     node_lookup = {n.id: n for n in road_network.nodes}
     arterial = []
@@ -34,11 +35,10 @@ def _road_unions(road_network: RoadNetwork):
     for e in road_network.edges:
         if e.road_class not in ('arterial', 'local'):
             continue
-        u = node_lookup.get(e.u)
-        v = node_lookup.get(e.v)
-        if u is None or v is None:
+        coords = _edge_coords(e, node_lookup)
+        if coords is None:
             continue
-        buf = LineString([(u.x, u.y), (v.x, v.y)]).buffer(float(getattr(e, 'width_m', 8.0)) / 2.0, cap_style=2, join_style=2)
+        buf = LineString(coords).buffer(float(getattr(e, 'width_m', 8.0)) / 2.0, cap_style=2, join_style=2)
         if e.road_class == 'arterial':
             arterial.append(buf)
         else:

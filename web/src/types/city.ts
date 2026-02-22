@@ -34,7 +34,7 @@ export type Point2D = { x: number; y: number };
 export type Polyline2D = { id: string; points: Point2D[] };
 export type Polygon2D = { id: string; points: Point2D[] };
 export type ContourLine = Polyline2D & { elevation_norm: number };
-export type RiverAreaPolygon = Polygon2D & { flow: number; width_mean_m: number; is_main_stem: boolean };
+export type RiverAreaPolygon = Polygon2D & { flow: number; width_mean_m: number; is_main_stem: boolean; source_river_id?: string | null };
 export type PedestrianPath = Polyline2D & { width_m: number; parent_block_id?: string | null };
 export type LandBlock = Polygon2D & { block_class: string; area_m2: number; parent_id?: string | null };
 export type ParcelLot = Polygon2D & { parcel_class: string; area_m2: number; parent_block_id?: string | null };
@@ -73,6 +73,7 @@ export type RoadEdgeRecord = {
   river_crossings: number;
   width_m: number;
   render_order: number;
+  path_points?: Point2D[] | null;
 };
 
 export type ResourceSite = {
@@ -118,6 +119,7 @@ export type CityArtifact = {
   };
   rivers: RiverLine[];
   river_areas?: RiverAreaPolygon[];
+  visual_envelope?: Polygon2D | null;
   hubs: HubRecord[];
   roads: {
     nodes: RoadNodeRecord[];
@@ -138,6 +140,11 @@ export type CityArtifact = {
     illegal_intersection_count: number;
     bridge_count: number;
     river_count: number;
+    river_coverage_ratio: number;
+    main_river_length_m: number;
+    river_area_m2: number;
+    river_area_clipped_ratio?: number | null;
+    visual_envelope_area_ratio?: number | null;
     avg_edge_weight: number;
     notes: string[];
   };
@@ -158,6 +165,7 @@ export type StageLayersSnapshot = {
   hillshade_preview?: number[][] | null;
   contour_lines?: ContourLine[];
   river_area_polygons?: RiverAreaPolygon[];
+  visual_envelope?: Polygon2D | null;
   suitability_preview?: number[][] | null;
   flood_risk_preview?: number[][] | null;
   population_potential_preview?: number[][] | null;

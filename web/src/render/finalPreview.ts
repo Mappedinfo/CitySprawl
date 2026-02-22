@@ -7,18 +7,21 @@ function drawGridOverlay(
   grid: number[][],
   extent: number,
   viewport: Viewport,
+  cssWidth: number,
+  cssHeight: number,
   colorize: (v: number) => [number, number, number, number],
 ): void {
   const rows = grid.length;
   const cols = grid[0]?.length ?? 0;
   if (!rows || !cols) return;
-  const { width, height } = ctx.canvas;
+  const width = cssWidth;
+  const height = cssHeight;
   const cellWWorld = extent / Math.max(cols - 1, 1);
   const cellHWorld = extent / Math.max(rows - 1, 1);
 
   ctx.save();
-  for (let y = 0; y < rows; y += 1) {
-    for (let x = 0; x < cols; x += 1) {
+  for (let y = 0; y < rows - 1; y += 1) {
+    for (let x = 0; x < cols - 1; x += 1) {
       const v = grid[y][x];
       if (v <= 0.05) continue;
       const [r, g, b, a] = colorize(v);
@@ -47,8 +50,10 @@ export function drawGreenZones(
   artifact: CityArtifact,
   greenZones: number[][],
   viewport: Viewport,
+  cssWidth: number,
+  cssHeight: number,
 ): void {
-  drawGridOverlay(ctx, greenZones, artifact.terrain.extent_m, viewport, (v) => {
+  drawGridOverlay(ctx, greenZones, artifact.terrain.extent_m, viewport, cssWidth, cssHeight, (v) => {
     const alpha = Math.min(0.34, 0.08 + v * 0.24);
     return [48, 210, 134, alpha];
   });
@@ -59,8 +64,11 @@ export function drawBuildingFootprints(
   artifact: CityArtifact,
   footprints: BuildingFootprint[],
   viewport: Viewport,
+  cssWidth: number,
+  cssHeight: number,
 ): void {
-  const { width, height } = ctx.canvas;
+  const width = cssWidth;
+  const height = cssHeight;
   const extent = artifact.terrain.extent_m;
   ctx.save();
   for (const bldg of footprints) {

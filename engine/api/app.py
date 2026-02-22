@@ -17,9 +17,10 @@ def _default_preset() -> GenerateConfig:
 def _river_valley_preset() -> GenerateConfig:
     return GenerateConfig(
         seed=17,
+        extent_m=10000.0,
         terrain={"noise_octaves": 6, "relief_strength": 1.15},
-        hydrology={"enable": True, "accum_threshold": 0.012, "min_river_length_m": 140.0},
-        hubs={"t1_count": 1, "t2_count": 5, "t3_count": 18, "min_distance_m": 110.0},
+        hydrology={"enable": True, "accum_threshold": 0.012, "min_river_length_m": 1200.0},
+        hubs={"t1_count": 1, "t2_count": 5, "t3_count": 18, "min_distance_m": 550.0},
         roads={"k_neighbors": 4, "loop_budget": 4, "branch_steps": 2, "slope_penalty": 1.8, "river_cross_penalty": 260.0},
     )
 
@@ -27,9 +28,10 @@ def _river_valley_preset() -> GenerateConfig:
 def _hills_preset() -> GenerateConfig:
     return GenerateConfig(
         seed=103,
+        extent_m=10000.0,
         terrain={"noise_octaves": 5, "relief_strength": 1.3},
-        hydrology={"enable": True, "accum_threshold": 0.02, "min_river_length_m": 90.0},
-        hubs={"t1_count": 1, "t2_count": 3, "t3_count": 14, "min_distance_m": 140.0},
+        hydrology={"enable": True, "accum_threshold": 0.02, "min_river_length_m": 1000.0},
+        hubs={"t1_count": 1, "t2_count": 3, "t3_count": 14, "min_distance_m": 700.0},
         roads={"k_neighbors": 3, "loop_budget": 2, "branch_steps": 1, "slope_penalty": 3.0, "river_cross_penalty": 420.0},
     )
 

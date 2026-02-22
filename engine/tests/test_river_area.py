@@ -15,11 +15,18 @@ def test_primary_river_selection_and_area_polygon_validity():
     assert selected[0]["is_main_stem"] is True
     assert len(selected) <= 3
 
-    selected2, areas = build_river_area_polygons(rivers, max_branches=2)
+    selected2, areas, meta = build_river_area_polygons(rivers, max_branches=2, clip_extent_m=240.0, return_meta=True)
     assert selected2
     assert areas
+    assert meta["pre_clip_area_m2"] >= meta["post_clip_area_m2"] >= 0.0
     for area in areas:
         poly = Polygon([(p.x, p.y) for p in area.points])
         assert poly.is_valid
         assert poly.area > 0.0
         assert area.width_mean_m > 0.0
+        assert area.source_river_id in {r["id"] for r in selected2}
+        minx, miny, maxx, maxy = poly.bounds
+        assert 0.0 <= minx <= 240.0
+        assert 0.0 <= miny <= 240.0
+        assert 0.0 <= maxx <= 240.0
+        assert 0.0 <= maxy <= 240.0

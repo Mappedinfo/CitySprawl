@@ -354,6 +354,89 @@ button:disabled {
   pointer-events: none;
 }
 
+.scale-bar {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(7, 12, 20, 0.72);
+  border: 1px solid rgba(108, 223, 255, 0.22);
+  box-shadow: 0 0 0 1px rgba(92, 238, 255, 0.08) inset;
+  pointer-events: none;
+  min-width: 120px;
+}
+
+.scale-bar-track {
+  position: relative;
+  height: 8px;
+  border-bottom: 2px solid rgba(214, 247, 255, 0.92);
+}
+
+.scale-bar-tick {
+  position: absolute;
+  bottom: -2px;
+  width: 0;
+  border-left: 2px solid rgba(214, 247, 255, 0.92);
+  height: 8px;
+}
+
+.scale-bar-tick.start {
+  left: 0;
+}
+
+.scale-bar-tick.mid {
+  left: 50%;
+  transform: translateX(-1px);
+  height: 6px;
+  border-left-color: rgba(140, 223, 246, 0.82);
+}
+
+.scale-bar-tick.end {
+  right: 0;
+}
+
+.scale-bar-label {
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
+}
+
+.north-arrow {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  width: 40px;
+  height: 64px;
+  padding: 6px 6px 4px;
+  border-radius: 10px;
+  background: rgba(7, 12, 20, 0.68);
+  border: 1px solid rgba(108, 223, 255, 0.2);
+  box-shadow: 0 0 0 1px rgba(92, 238, 255, 0.06) inset;
+  pointer-events: none;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 3px;
+}
+
+.north-arrow-label {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+}
+
+.north-arrow-icon {
+  width: 24px;
+  height: 34px;
+  fill: rgba(205, 244, 255, 0.9);
+  stroke: rgba(92, 238, 255, 0.45);
+  stroke-width: 1;
+}
+
 .caption-title-zh {
   color: var(--accent);
   font-size: 0.95rem;

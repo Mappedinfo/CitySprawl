@@ -1,4 +1,4 @@
-import type { CityArtifact } from '../types/city';
+import type { CityArtifact, RiverLine, RoadEdgeRecord } from '../types/city';
 import { worldToScreen, type Viewport } from './viewport';
 
 export type LayerFlags = {
@@ -7,7 +7,35 @@ export type LayerFlags = {
   roads: boolean;
   debugCandidates: boolean;
   transparentBackground?: boolean;
+  cssWidth?: number;
+  cssHeight?: number;
+  preserveCanvas?: boolean;
 };
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+export function worldMetersToPixels(meters: number, extent: number, cssWidth: number, scale: number): number {
+  if (!Number.isFinite(meters) || meters <= 0 || extent <= 0 || cssWidth <= 0) return 0;
+  return (meters / extent) * cssWidth * scale;
+}
+
+export function roadStrokeWidthPx(edge: Pick<RoadEdgeRecord, 'road_class' | 'width_m'>, extent: number, cssWidth: number, viewportScale: number): number {
+  const baseMeters =
+    edge.width_m ??
+    (edge.road_class === 'arterial' ? 18 : edge.road_class === 'pedestrian' ? 3 : 8);
+  const worldPx = worldMetersToPixels(baseMeters, extent, cssWidth, viewportScale);
+  if (edge.road_class === 'arterial') return clamp(worldPx * 0.6, 1.2, 10);
+  if (edge.road_class === 'pedestrian') return clamp(worldPx * 0.7, 0.5, 3);
+  return clamp(worldPx * 0.62, 0.8, 6);
+}
+
+export function riverCenterlineWidthPx(river: Pick<RiverLine, 'flow'>, hasRiverAreas: boolean): number {
+  const base = 0.75 + Math.log10(1 + Math.max(0, river.flow)) * 0.9;
+  const adjusted = hasRiverAreas ? base * 0.7 : base;
+  return clamp(adjusted, 0.8, 4);
+}
 
 function terrainClassColor(cls: number): [number, number, number, number] {
   switch (cls) {
@@ -32,6 +60,8 @@ function drawTerrainClassified(
   ctx: CanvasRenderingContext2D,
   artifact: CityArtifact,
   viewport: Viewport,
+  cssWidth: number,
+  cssHeight: number,
 ): void {
   const classes = artifact.terrain.terrain_class_preview;
   if (!classes?.length || !classes[0]?.length) return;
@@ -39,11 +69,12 @@ function drawTerrainClassified(
   const rows = classes.length;
   const cols = classes[0].length;
   const extent = artifact.terrain.extent_m;
-  const { width, height } = ctx.canvas;
+  const width = cssWidth;
+  const height = cssHeight;
 
   ctx.save();
-  for (let y = 0; y < rows; y += 1) {
-    for (let x = 0; x < cols; x += 1) {
+  for (let y = 0; y < rows - 1; y += 1) {
+    for (let x = 0; x < cols - 1; x += 1) {
       const p = worldToScreen((x / Math.max(cols - 1, 1)) * extent, (y / Math.max(rows - 1, 1)) * extent, extent, width, height, viewport);
       const p2 = worldToScreen(
         ((x + 1) / Math.max(cols - 1, 1)) * extent,
@@ -71,11 +102,18 @@ function drawTerrainClassified(
   ctx.restore();
 }
 
-function drawRiverAreas(ctx: CanvasRenderingContext2D, artifact: CityArtifact, viewport: Viewport): void {
+function drawRiverAreas(
+  ctx: CanvasRenderingContext2D,
+  artifact: CityArtifact,
+  viewport: Viewport,
+  cssWidth: number,
+  cssHeight: number,
+): void {
   const riverAreas = artifact.river_areas ?? [];
   if (!riverAreas.length) return;
   const extent = artifact.terrain.extent_m;
-  const { width, height } = ctx.canvas;
+  const width = cssWidth;
+  const height = cssHeight;
   ctx.save();
   for (const area of riverAreas) {
     if (!area.points?.length) continue;
@@ -86,9 +124,9 @@ function drawRiverAreas(ctx: CanvasRenderingContext2D, artifact: CityArtifact, v
       else ctx.lineTo(s.x, s.y);
     });
     ctx.closePath();
-    ctx.fillStyle = area.is_main_stem ? 'rgba(16, 112, 162, 0.78)' : 'rgba(16, 112, 162, 0.55)';
-    ctx.strokeStyle = 'rgba(80, 214, 255, 0.6)';
-    ctx.lineWidth = 1;
+    ctx.fillStyle = area.is_main_stem ? 'rgba(20, 126, 186, 0.66)' : 'rgba(18, 112, 168, 0.44)';
+    ctx.strokeStyle = area.is_main_stem ? 'rgba(108, 232, 255, 0.52)' : 'rgba(84, 206, 255, 0.38)';
+    ctx.lineWidth = area.is_main_stem ? 1.1 : 0.8;
     ctx.fill();
     ctx.stroke();
   }
@@ -102,12 +140,15 @@ export function drawCity(
   terrainBitmap: ImageBitmap | null,
   layers: LayerFlags,
 ): void {
-  const { width, height } = ctx.canvas;
-  ctx.clearRect(0, 0, width, height);
-  if (!layers.transparentBackground) {
-    // Solid fallback background (UI shell avoids gradients by design).
-    ctx.fillStyle = 'rgba(6, 14, 24, 1)';
-    ctx.fillRect(0, 0, width, height);
+  const width = layers.cssWidth ?? ctx.canvas.clientWidth ?? ctx.canvas.width;
+  const height = layers.cssHeight ?? ctx.canvas.clientHeight ?? ctx.canvas.height;
+  if (!layers.preserveCanvas) {
+    ctx.clearRect(0, 0, width, height);
+    if (!layers.transparentBackground) {
+      // Solid fallback background (UI shell avoids gradients by design).
+      ctx.fillStyle = 'rgba(6, 14, 24, 1)';
+      ctx.fillRect(0, 0, width, height);
+    }
   }
 
   if (!artifact) {
@@ -120,7 +161,7 @@ export function drawCity(
   const extent = artifact.terrain.extent_m;
   if (layers.terrain && terrainBitmap) {
     if (artifact.terrain.terrain_class_preview?.length) {
-      drawTerrainClassified(ctx, artifact, viewport);
+      drawTerrainClassified(ctx, artifact, viewport, width, height);
     } else {
       ctx.save();
       const sx = viewport.panX;
@@ -133,7 +174,7 @@ export function drawCity(
       ctx.restore();
     }
   } else if (layers.terrain && artifact.terrain.terrain_class_preview?.length) {
-    drawTerrainClassified(ctx, artifact, viewport);
+    drawTerrainClassified(ctx, artifact, viewport, width, height);
   }
 
   if (layers.debugCandidates) {
@@ -152,14 +193,14 @@ export function drawCity(
   }
 
   if (layers.rivers) {
-    drawRiverAreas(ctx, artifact, viewport);
+    drawRiverAreas(ctx, artifact, viewport, width, height);
+    const hasRiverAreas = (artifact.river_areas?.length ?? 0) > 0;
     ctx.save();
-    ctx.strokeStyle = 'rgba(72, 190, 255, 0.92)';
+    ctx.strokeStyle = 'rgba(96, 224, 255, 0.72)';
     ctx.lineCap = 'round';
     for (const river of artifact.rivers) {
       if (river.points.length < 2) continue;
-      const widthPx = Math.max(1, Math.min(5, 0.8 + Math.log10(1 + river.flow)));
-      ctx.lineWidth = widthPx;
+      ctx.lineWidth = riverCenterlineWidthPx(river, hasRiverAreas);
       ctx.beginPath();
       river.points.forEach((pt, i) => {
         const s = worldToScreen(pt.x, pt.y, extent, width, height, viewport);
@@ -182,8 +223,7 @@ export function drawCity(
       const u = nodeMap.get(edge.u);
       const v = nodeMap.get(edge.v);
       if (!u || !v) continue;
-      const a = worldToScreen(u.x, u.y, extent, width, height, viewport);
-      const b = worldToScreen(v.x, v.y, extent, width, height, viewport);
+      const path = edge.path_points && edge.path_points.length >= 2 ? edge.path_points : null;
       if (edge.road_class === 'arterial') {
         ctx.strokeStyle = 'rgba(236, 246, 255, 0.98)';
       } else if (edge.road_class === 'pedestrian') {
@@ -191,20 +231,38 @@ export function drawCity(
       } else {
         ctx.strokeStyle = 'rgba(143, 226, 255, 0.72)';
       }
-      const worldScale = (width / Math.max(extent, 1)) * viewport.scale;
-      const widthPx = Math.max(
-        edge.road_class === 'arterial' ? 1.6 : edge.road_class === 'pedestrian' ? 0.7 : 0.95,
-        ((edge.width_m ?? (edge.road_class === 'arterial' ? 18 : edge.road_class === 'pedestrian' ? 3 : 8)) * worldScale) / 7.5,
-      );
-      ctx.lineWidth = widthPx;
+      ctx.lineWidth = roadStrokeWidthPx(edge, extent, width, viewport.scale);
       ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
+      if (path) {
+        path.forEach((pt, idx) => {
+          const s = worldToScreen(pt.x, pt.y, extent, width, height, viewport);
+          if (idx === 0) ctx.moveTo(s.x, s.y);
+          else ctx.lineTo(s.x, s.y);
+        });
+      } else {
+        const a = worldToScreen(u.x, u.y, extent, width, height, viewport);
+        const b = worldToScreen(v.x, v.y, extent, width, height, viewport);
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      }
       ctx.stroke();
       if (edge.river_crossings > 0) {
+        let mx: number;
+        let my: number;
+        if (path && path.length >= 2) {
+          const mid = path[Math.floor(path.length / 2)];
+          const s = worldToScreen(mid.x, mid.y, extent, width, height, viewport);
+          mx = s.x;
+          my = s.y;
+        } else {
+          const a = worldToScreen(u.x, u.y, extent, width, height, viewport);
+          const b = worldToScreen(v.x, v.y, extent, width, height, viewport);
+          mx = (a.x + b.x) / 2;
+          my = (a.y + b.y) / 2;
+        }
         ctx.fillStyle = 'rgba(255, 196, 78, 0.95)';
         ctx.beginPath();
-        ctx.arc((a.x + b.x) / 2, (a.y + b.y) / 2, 2.1, 0, Math.PI * 2);
+        ctx.arc(mx, my, 2.1, 0, Math.PI * 2);
         ctx.fill();
       }
     }

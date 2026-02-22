@@ -12,15 +12,17 @@ import type { CityArtifact, GenerateConfig, HubRecord, PresetsResponse, StageArt
 import { Controls } from './ui/Controls';
 import { CaptionsOverlay } from './ui/CaptionsOverlay';
 import { MetricsPanel } from './ui/MetricsPanel';
+import { NorthArrow } from './ui/NorthArrow';
+import { ScaleBar } from './ui/ScaleBar';
 import { StageInspector } from './ui/StageInspector';
 
 const defaultConfig: GenerateConfig = {
   seed: 42,
-  extent_m: 2048,
+  extent_m: 10000,
   grid_resolution: 256,
   terrain: { noise_octaves: 5, relief_strength: 1 },
-  hydrology: { enable: true, accum_threshold: 0.015, min_river_length_m: 120 },
-  hubs: { t1_count: 1, t2_count: 4, t3_count: 20, min_distance_m: 120 },
+  hydrology: { enable: true, accum_threshold: 0.015, min_river_length_m: 1000 },
+  hubs: { t1_count: 1, t2_count: 4, t3_count: 20, min_distance_m: 600 },
   roads: { k_neighbors: 4, loop_budget: 3, branch_steps: 2, slope_penalty: 2, river_cross_penalty: 300 },
   naming: { provider: 'mock' },
 };
@@ -31,6 +33,90 @@ const USE_THREE_TERRAIN = true;
 type StageSource = 'none' | 'staged' | 'fallback';
 
 type LayerState = LayerToggles;
+
+function fitViewportToArtifact(
+  artifact: CityArtifact,
+  cssWidth: number,
+  cssHeight: number,
+): Viewport {
+  const extent = artifact.terrain.extent_m;
+  const clampPoint = (x: number, y: number) => ({
+    x: Math.max(0, Math.min(extent, x)),
+    y: Math.max(0, Math.min(extent, y)),
+  });
+  const pts: Array<{ x: number; y: number }> = [];
+  const fallbackPts: Array<{ x: number; y: number }> = [];
+  const nodeById = new Map(artifact.roads.nodes.map((n) => [n.id, n] as const));
+
+  for (const hub of artifact.hubs) {
+    pts.push(clampPoint(hub.x, hub.y));
+  }
+
+  for (const edge of artifact.roads.edges) {
+    if (edge.path_points && edge.path_points.length >= 2) {
+      for (const p of edge.path_points) pts.push(clampPoint(p.x, p.y));
+      continue;
+    }
+    const u = nodeById.get(edge.u);
+    const v = nodeById.get(edge.v);
+    if (u) pts.push(clampPoint(u.x, u.y));
+    if (v) pts.push(clampPoint(v.x, v.y));
+  }
+
+  // Use river centerlines for framing instead of buffered river polygons; polygons can extend
+  // beyond the study boundary and distort zoom.
+  for (const river of artifact.rivers ?? []) {
+    for (const p of river.points) pts.push(clampPoint(p.x, p.y));
+  }
+
+  // Fallback points if the city graph is empty.
+  for (const river of artifact.river_areas ?? []) {
+    for (const p of river.points) fallbackPts.push(clampPoint(p.x, p.y));
+  }
+  for (const ped of artifact.pedestrian_paths ?? []) {
+    for (const p of ped.points) fallbackPts.push(clampPoint(p.x, p.y));
+  }
+  if (!pts.length) pts.push(...fallbackPts);
+
+  if (!pts.length || cssWidth <= 0 || cssHeight <= 0) {
+    return { panX: 0, panY: 0, scale: 1 };
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+
+  // Expand bounds slightly to include labels and line widths.
+  const padWorldX = Math.max(160, (maxX - minX) * 0.12);
+  const padWorldY = Math.max(160, (maxY - minY) * 0.12);
+  minX = Math.max(0, minX - padWorldX);
+  minY = Math.max(0, minY - padWorldY);
+  maxX = Math.min(extent, maxX + padWorldX);
+  maxY = Math.min(extent, maxY + padWorldY);
+
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+  const margin = 0.08;
+  const scaleX = ((1 - margin * 2) * extent) / spanX;
+  const scaleY = ((1 - margin * 2) * extent) / spanY;
+  const scale = clampScale(Math.min(scaleX, scaleY));
+
+  const cx = (minX + maxX) * 0.5;
+  const cy = (minY + maxY) * 0.5;
+  const screenX = (cx / extent) * cssWidth;
+  const screenY = cssHeight - (cy / extent) * cssHeight;
+  const panX = cssWidth * 0.5 - screenX * scale;
+  const panY = cssHeight * 0.5 - screenY * scale;
+
+  return { panX, panY, scale };
+}
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -45,6 +131,7 @@ export default function App() {
   const [health, setHealth] = useState<string>('checking');
   const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ panX: 0, panY: 0, scale: 1 });
+  const [stageSize, setStageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [source, setSource] = useState<StageSource>('none');
   const [reducedMotion, setReducedMotion] = useState(false);
   const [layers, setLayers] = useState<LayerState>({
@@ -70,6 +157,7 @@ export default function App() {
 
   const timeline = useTimelinePlayer(stages, TIMELINE_TOTAL_MS);
   const currentStage = stages[timeline.currentStageIndex] ?? null;
+  const stageShowsTerrain = !currentStage || currentStage.visible_layers.includes('terrain');
 
   const selectedHub = useMemo<HubRecord | null>(() => {
     if (!artifact || !selectedHubId) return null;
@@ -128,9 +216,13 @@ export default function App() {
 
   const redraw = () => {
     const canvas = canvasRef.current;
+    const wrapper = wrapperRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const rect = wrapper?.getBoundingClientRect();
+    const cssWidth = rect?.width ?? canvas.clientWidth ?? 1;
+    const cssHeight = rect?.height ?? canvas.clientHeight ?? 1;
     drawStageScene({
       ctx,
       artifact,
@@ -141,6 +233,8 @@ export default function App() {
       nowMs: timeline.currentTimeMs,
       reducedMotion,
       transparentBackground: USE_THREE_TERRAIN,
+      cssWidth,
+      cssHeight,
     });
   };
 
@@ -157,6 +251,10 @@ export default function App() {
     const resize = () => {
       const rect = wrapper.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
+      setStageSize((prev) => {
+        if (Math.abs(prev.width - rect.width) < 0.5 && Math.abs(prev.height - rect.height) < 0.5) return prev;
+        return { width: rect.width, height: rect.height };
+      });
       canvas.width = Math.floor(rect.width * dpr);
       canvas.height = Math.floor(rect.height * dpr);
       canvas.style.width = `${rect.width}px`;
@@ -174,6 +272,8 @@ export default function App() {
         nowMs: timeline.currentTimeMs,
         reducedMotion,
         transparentBackground: USE_THREE_TERRAIN,
+        cssWidth: rect.width,
+        cssHeight: rect.height,
       });
     };
 
@@ -188,17 +288,26 @@ export default function App() {
     setError(null);
     setSelectedHubId(null);
     try {
+      let nextResponse: StagedCityResponse | null = null;
       try {
         const staged = await generateCityStaged(config);
+        nextResponse = staged;
         setResponse(staged);
         setSource('staged');
       } catch (stagedErr) {
         const legacyArtifact = await generateCity(config);
-        setResponse(composeFallbackStagedResponse(legacyArtifact));
+        const fallback = composeFallbackStagedResponse(legacyArtifact);
+        nextResponse = fallback;
+        setResponse(fallback);
         setSource('fallback');
         setError(`Staged API unavailable. Using local fallback timeline. ${stagedErr instanceof Error ? stagedErr.message : ''}`.trim());
       }
-      setViewport({ panX: 0, panY: 0, scale: 1 });
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      if (nextResponse?.final_artifact && rect) {
+        setViewport(fitViewportToArtifact(nextResponse.final_artifact, rect.width, rect.height));
+      } else {
+        setViewport({ panX: 0, panY: 0, scale: 1 });
+      }
       timeline.reset(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -328,7 +437,7 @@ export default function App() {
         </div>
 
         <div ref={wrapperRef} className="canvas-stage hud-frame">
-          <TerrainScene artifact={artifact} viewport={viewport} visible={USE_THREE_TERRAIN && layers.terrain} />
+          <TerrainScene artifact={artifact} viewport={viewport} visible={USE_THREE_TERRAIN && layers.terrain && stageShowsTerrain} />
           <canvas
             ref={canvasRef}
             onPointerDown={handlePointerDown}
@@ -374,6 +483,8 @@ export default function App() {
           ) : null}
 
           <CaptionsOverlay stage={currentStage} />
+          {artifact ? <ScaleBar extent={extent} viewport={viewport} cssWidth={stageSize.width || (wrapperRef.current?.clientWidth ?? 0)} /> : null}
+          {artifact ? <NorthArrow /> : null}
         </div>
 
         <TimelinePlayer

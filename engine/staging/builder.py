@@ -144,6 +144,7 @@ def build_stages(
                 hillshade_preview=_grid_to_list(hillshade_preview),
                 contour_lines=list(contour_lines),
                 river_area_polygons=list(river_area_polygons),
+                visual_envelope=final_artifact.visual_envelope,
             )
             metrics = {
                 'river_area_count': len(river_area_polygons),
@@ -161,6 +162,7 @@ def build_stages(
                 flood_risk_preview=_grid_to_list(flood_risk_preview),
                 population_potential_preview=_grid_to_list(population_potential_preview),
                 resource_sites=list(resource_sites),
+                visual_envelope=final_artifact.visual_envelope,
             )
             metrics = {
                 'resource_site_count': len(resource_sites),
@@ -170,6 +172,7 @@ def build_stages(
             layers = StageLayersSnapshot(
                 contour_lines=list(contour_lines),
                 river_area_polygons=list(river_area_polygons),
+                visual_envelope=final_artifact.visual_envelope,
                 traffic_edge_flows=list(traffic_edge_flows),
             )
             metrics = traffic_metrics
@@ -182,12 +185,14 @@ def build_stages(
                 parcel_lots=list(parcel_lots),
                 building_footprints=list(building_footprints),
                 green_zones_preview=_grid_to_list(green_zones_preview),
+                visual_envelope=final_artifact.visual_envelope,
             )
             metrics = final_metrics
         else:
             layers = StageLayersSnapshot(
                 contour_lines=list(contour_lines),
                 river_area_polygons=list(river_area_polygons),
+                visual_envelope=final_artifact.visual_envelope,
             )
             metrics = {
                 'road_edge_count': final_artifact.metrics.road_edge_count,

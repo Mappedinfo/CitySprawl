@@ -33,20 +33,36 @@ def river_union_geometry(river_areas: Sequence[RiverAreaPolygon]):
     return unary_union(polys)
 
 
+def _edge_coords(edge, node_lookup):
+    path_points = getattr(edge, "path_points", None)
+    if path_points and len(path_points) >= 2:
+        coords = []
+        for p in path_points:
+            x = p.x if hasattr(p, "x") else p.get("x")
+            y = p.y if hasattr(p, "y") else p.get("y")
+            coords.append((float(x), float(y)))
+        if len(coords) >= 2:
+            return coords
+    u = node_lookup.get(edge.u)
+    v = node_lookup.get(edge.v)
+    if u is None or v is None:
+        return None
+    return [(u.x, u.y), (v.x, v.y)]
+
+
 def vehicular_corridor_union(road_network: RoadNetwork):
     node_lookup = {n.id: n for n in road_network.nodes}
     geoms = []
     for edge in road_network.edges:
         if edge.road_class not in ('arterial', 'local'):
             continue
-        u = node_lookup.get(edge.u)
-        v = node_lookup.get(edge.v)
-        if u is None or v is None:
+        coords = _edge_coords(edge, node_lookup)
+        if coords is None:
             continue
         width_m = float(getattr(edge, 'width_m', 8.0) or 8.0)
         if width_m <= 0.0:
             continue
-        line = LineString([(u.x, u.y), (v.x, v.y)])
+        line = LineString(coords)
         geoms.append(line.buffer(width_m / 2.0, cap_style=2, join_style=2, resolution=4))
     if not geoms:
         return Polygon()

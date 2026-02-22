@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import atan2, cos, pi, sin
+import heapq
+from math import atan2, cos, hypot, pi, sin
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
@@ -34,6 +35,7 @@ class BuiltRoadEdge:
     river_crossings: int
     width_m: float = 8.0
     render_order: int = 1
+    path_points: Optional[List[Vec2]] = None
 
 
 @dataclass
@@ -93,6 +95,249 @@ def _segment_cost(
 
     weight = length * (1.0 + slope_penalty * slope_norm) + river_crossings * river_cross_penalty
     return (float(weight), float(length), int(river_crossings))
+
+
+def _polyline_length(points: Sequence[Vec2]) -> float:
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for i in range(len(points) - 1):
+        total += points[i].distance_to(points[i + 1])
+    return float(total)
+
+
+def _polyline_cost(
+    points: Sequence[Vec2],
+    extent_m: float,
+    slope: np.ndarray,
+    river_mask: np.ndarray,
+    slope_penalty: float,
+    river_cross_penalty: float,
+) -> Tuple[float, float, int]:
+    if len(points) < 2:
+        return (0.0, 0.0, 0)
+    total_weight = 0.0
+    total_len = 0.0
+    crossings = 0
+    for i in range(len(points) - 1):
+        w, length_m, river_cross = _segment_cost(
+            points[i],
+            points[i + 1],
+            extent_m,
+            slope,
+            river_mask,
+            slope_penalty,
+            river_cross_penalty,
+        )
+        total_weight += float(w)
+        total_len += float(length_m)
+        crossings += int(river_cross)
+    return (float(total_weight), float(total_len), int(crossings))
+
+
+def _grid_to_world(ix: int, iy: int, extent_m: float, resolution: int) -> Vec2:
+    if resolution <= 1:
+        return Vec2(0.0, 0.0)
+    x = (ix / float(resolution - 1)) * extent_m
+    y = (iy / float(resolution - 1)) * extent_m
+    return Vec2(float(x), float(y))
+
+
+def _resample_grid_nn(grid: np.ndarray, target_res: int) -> np.ndarray:
+    if grid.ndim != 2:
+        raise ValueError("grid must be 2D")
+    src_rows, src_cols = grid.shape
+    if src_rows == target_res and src_cols == target_res:
+        return grid
+    ys = np.linspace(0, src_rows - 1, target_res)
+    xs = np.linspace(0, src_cols - 1, target_res)
+    yi = np.clip(np.round(ys).astype(int), 0, src_rows - 1)
+    xi = np.clip(np.round(xs).astype(int), 0, src_cols - 1)
+    return grid[np.ix_(yi, xi)]
+
+
+_NBR8: Tuple[Tuple[int, int], ...] = (
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
+)
+
+
+def _astar_grid(
+    start: Tuple[int, int],
+    goal: Tuple[int, int],
+    slope_norm: np.ndarray,
+    river_mask: np.ndarray,
+    slope_factor: float,
+    river_penalty: float,
+) -> Optional[List[Tuple[int, int]]]:
+    rows, cols = slope_norm.shape
+    if rows == 0 or cols == 0:
+        return None
+
+    def in_bounds(y: int, x: int) -> bool:
+        return 0 <= y < rows and 0 <= x < cols
+
+    sy, sx = start
+    gy, gx = goal
+    if not in_bounds(sy, sx) or not in_bounds(gy, gx):
+        return None
+
+    open_heap: List[Tuple[float, float, Tuple[int, int]]] = []
+    heapq.heappush(open_heap, (0.0, 0.0, start))
+    came_from: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    g_score: Dict[Tuple[int, int], float] = {start: 0.0}
+    closed: Set[Tuple[int, int]] = set()
+
+    def h(y: int, x: int) -> float:
+        return hypot(gx - x, gy - y)
+
+    while open_heap:
+        _, current_g, cur = heapq.heappop(open_heap)
+        if cur in closed:
+            continue
+        closed.add(cur)
+        if cur == goal:
+            path = [cur]
+            while path[-1] in came_from:
+                path.append(came_from[path[-1]])
+            path.reverse()
+            return path
+        cy, cx = cur
+        for dy, dx in _NBR8:
+            ny = cy + dy
+            nx = cx + dx
+            if not in_bounds(ny, nx):
+                continue
+            step_len = 1.41421356237 if (dx != 0 and dy != 0) else 1.0
+            slope_cost = slope_factor * float(slope_norm[ny, nx] ** 2)
+            river_cost = river_penalty if bool(river_mask[ny, nx]) else 0.0
+            step_cost = step_len * (1.0 + slope_cost) + river_cost
+            tentative = current_g + step_cost
+            nbr = (ny, nx)
+            if tentative >= g_score.get(nbr, float("inf")):
+                continue
+            came_from[nbr] = cur
+            g_score[nbr] = tentative
+            heapq.heappush(open_heap, (tentative + h(ny, nx), tentative, nbr))
+    return None
+
+
+def _perpendicular_distance(p: Vec2, a: Vec2, b: Vec2) -> float:
+    if a.distance_to(b) <= 1e-6:
+        return p.distance_to(a)
+    ab = b - a
+    ap = p - a
+    area2 = abs(ab.cross(ap))
+    return area2 / max(ab.length(), 1e-6)
+
+
+def _rdp(points: Sequence[Vec2], epsilon: float) -> List[Vec2]:
+    if len(points) <= 2:
+        return list(points)
+    a = points[0]
+    b = points[-1]
+    max_dist = -1.0
+    idx = -1
+    for i in range(1, len(points) - 1):
+        d = _perpendicular_distance(points[i], a, b)
+        if d > max_dist:
+            max_dist = d
+            idx = i
+    if max_dist <= epsilon or idx < 0:
+        return [a, b]
+    left = _rdp(points[: idx + 1], epsilon)
+    right = _rdp(points[idx:], epsilon)
+    return left[:-1] + right
+
+
+def _route_polyline_for_edge(
+    edge: BuiltRoadEdge,
+    node_lookup: Dict[str, BuiltRoadNode],
+    extent_m: float,
+    slope: np.ndarray,
+    river_mask: np.ndarray,
+) -> List[Vec2]:
+    u = node_lookup.get(edge.u)
+    v = node_lookup.get(edge.v)
+    if u is None or v is None:
+        return []
+    start = u.pos
+    end = v.pos
+    route_res = min(192, max(96, slope.shape[0] // 2 if slope.shape[0] > 0 else 96))
+    slope_grid = _resample_grid_nn(slope, route_res).astype(np.float64)
+    river_grid = _resample_grid_nn(river_mask.astype(np.float64), route_res) > 0.5
+    slope_max = float(np.max(slope_grid)) if slope_grid.size else 0.0
+    slope_norm = slope_grid / (slope_max + 1e-9) if slope_max > 0 else np.zeros_like(slope_grid)
+
+    sx, sy = _world_to_grid(start, extent_m, route_res)
+    gx, gy = _world_to_grid(end, extent_m, route_res)
+    start_cell = (sy, sx)
+    goal_cell = (gy, gx)
+
+    slope_factor = 18.0 if edge.road_class == "arterial" else 10.0
+    river_penalty = 1500.0 if edge.road_class == "arterial" else 700.0
+    cells = _astar_grid(start_cell, goal_cell, slope_norm, river_grid, slope_factor, river_penalty)
+    if not cells or len(cells) < 2:
+        return [start, end]
+
+    pts = [_grid_to_world(x, y, extent_m, route_res) for (y, x) in cells]
+    pts[0] = start
+    pts[-1] = end
+
+    # Drop immediate duplicates.
+    cleaned: List[Vec2] = []
+    for p in pts:
+        if not cleaned or p.distance_to(cleaned[-1]) > 1e-6:
+            cleaned.append(p)
+    if len(cleaned) >= 3:
+        cleaned = _rdp(cleaned, epsilon=max(8.0, extent_m * 0.0015))
+        cleaned[0] = start
+        cleaned[-1] = end
+    return cleaned
+
+
+def _route_all_edges(
+    nodes: Sequence[BuiltRoadNode],
+    edges: List[BuiltRoadEdge],
+    extent_m: float,
+    slope: np.ndarray,
+    river_mask: np.ndarray,
+    slope_penalty: float,
+    river_cross_penalty: float,
+) -> None:
+    node_lookup = {n.id: n for n in nodes}
+    for i, edge in enumerate(edges):
+        if edge.road_class not in ("arterial", "local"):
+            continue
+        path_points = _route_polyline_for_edge(edge, node_lookup, extent_m, slope, river_mask)
+        if len(path_points) < 2:
+            continue
+        weight, length_m, crossings = _polyline_cost(
+            path_points,
+            extent_m=extent_m,
+            slope=slope,
+            river_mask=river_mask,
+            slope_penalty=slope_penalty,
+            river_cross_penalty=river_cross_penalty,
+        )
+        edges[i] = BuiltRoadEdge(
+            id=edge.id,
+            u=edge.u,
+            v=edge.v,
+            road_class=edge.road_class,
+            weight=weight,
+            length_m=length_m,
+            river_crossings=crossings,
+            width_m=edge.width_m,
+            render_order=edge.render_order,
+            path_points=path_points,
+        )
 
 
 def _build_candidate_graph(
@@ -393,6 +638,7 @@ def _dedupe_and_snap(
                 river_crossings=edge.river_crossings,
                 width_m=edge.width_m,
                 render_order=edge.render_order,
+                path_points=edge.path_points,
             )
         )
 
@@ -529,5 +775,14 @@ def generate_roads(
     )
 
     nodes, edges, extra = _dedupe_and_snap(nodes, edges)
+    _route_all_edges(
+        nodes=nodes,
+        edges=edges,
+        extent_m=extent_m,
+        slope=slope,
+        river_mask=river_mask,
+        slope_penalty=slope_penalty,
+        river_cross_penalty=river_cross_penalty,
+    )
     metrics = _metrics(nodes, edges, extra)
     return RoadBuildResult(nodes=nodes, edges=edges, candidate_debug=candidate_debug, metrics=metrics)

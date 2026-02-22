@@ -38,6 +38,11 @@ def test_generate_success():
     assert "river_areas" in body
     assert "terrain_class_preview" in body["terrain"]
     assert all("width_m" in e and "render_order" in e for e in body["roads"]["edges"])
+    assert "river_coverage_ratio" in body["metrics"]
+    assert "river_area_clipped_ratio" in body["metrics"]
+    assert "visual_envelope_area_ratio" in body["metrics"]
+    assert body.get("visual_envelope") is not None
+    assert any(e.get("path_points") for e in body["roads"]["edges"])
 
 
 def test_generate_staged_success():
@@ -65,6 +70,8 @@ def test_generate_staged_success():
     assert "river_area_polygons" in body["stages"][0]["layers"]
     assert body["stages"][3]["layers"]["traffic_edge_flows"]
     assert "land_blocks" in body["stages"][4]["layers"]
+    assert body["stages"][1]["layers"].get("visual_envelope") is not None
+    assert body["final_artifact"]["metrics"]["river_coverage_ratio"] >= 0.0
 
 
 def test_generate_validation_error():

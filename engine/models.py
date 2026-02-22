@@ -17,14 +17,14 @@ class TerrainConfig(StrictModel):
 class HydrologyConfig(StrictModel):
     enable: bool = True
     accum_threshold: float = Field(default=0.015, gt=0.0, lt=1.0)
-    min_river_length_m: float = Field(default=120.0, ge=0.0)
+    min_river_length_m: float = Field(default=1000.0, ge=0.0)
 
 
 class HubsConfig(StrictModel):
     t1_count: int = Field(default=1, ge=1, le=8)
     t2_count: int = Field(default=4, ge=0, le=64)
     t3_count: int = Field(default=20, ge=0, le=512)
-    min_distance_m: float = Field(default=120.0, gt=0.0)
+    min_distance_m: float = Field(default=600.0, gt=0.0)
 
 
 class RoadsConfig(StrictModel):
@@ -41,7 +41,7 @@ class NamingConfig(StrictModel):
 
 class GenerateConfig(StrictModel):
     seed: int = 42
-    extent_m: float = Field(default=2048.0, gt=100.0)
+    extent_m: float = Field(default=10000.0, gt=100.0)
     grid_resolution: int = Field(default=512, ge=32, le=1024)
     terrain: TerrainConfig = Field(default_factory=TerrainConfig)
     hydrology: HydrologyConfig = Field(default_factory=HydrologyConfig)
@@ -80,6 +80,7 @@ class RiverAreaPolygon(Polygon2D):
     flow: float = 0.0
     width_mean_m: float = 0.0
     is_main_stem: bool = False
+    source_river_id: Optional[str] = None
 
 
 class PedestrianPath(Polyline2D):
@@ -144,6 +145,7 @@ class RoadEdgeRecord(StrictModel):
     river_crossings: int = 0
     width_m: float = 8.0
     render_order: int = 1
+    path_points: Optional[List[Point2D]] = None
 
 
 class RoadNetwork(StrictModel):
@@ -199,6 +201,11 @@ class Metrics(StrictModel):
     illegal_intersection_count: int
     bridge_count: int
     river_count: int
+    river_coverage_ratio: float = 0.0
+    main_river_length_m: float = 0.0
+    river_area_m2: float = 0.0
+    river_area_clipped_ratio: Optional[float] = None
+    visual_envelope_area_ratio: Optional[float] = None
     avg_edge_weight: float
     notes: List[str] = Field(default_factory=list)
 
@@ -216,6 +223,7 @@ class CityArtifact(StrictModel):
     terrain: TerrainLayer
     rivers: List[RiverLine]
     river_areas: List[RiverAreaPolygon] = Field(default_factory=list)
+    visual_envelope: Optional[Polygon2D] = None
     hubs: List[HubRecord]
     roads: RoadNetwork
     pedestrian_paths: List[PedestrianPath] = Field(default_factory=list)
@@ -235,6 +243,7 @@ class StageLayersSnapshot(StrictModel):
     hillshade_preview: Optional[List[List[float]]] = None
     contour_lines: List[ContourLine] = Field(default_factory=list)
     river_area_polygons: List[RiverAreaPolygon] = Field(default_factory=list)
+    visual_envelope: Optional[Polygon2D] = None
     suitability_preview: Optional[List[List[float]]] = None
     flood_risk_preview: Optional[List[List[float]]] = None
     population_potential_preview: Optional[List[List[float]]] = None

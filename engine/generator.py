@@ -6,6 +6,8 @@ from time import perf_counter
 from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
+from shapely.geometry import MultiPoint, Polygon as ShapelyPolygon, box
+from shapely.geometry.base import BaseGeometry
 
 from engine.analysis import (
     compute_population_potential,
@@ -17,6 +19,7 @@ from engine.blocks import (
     extract_macro_blocks,
     generate_pedestrian_paths_and_parcels,
 )
+from engine.blocks.extraction import river_union_geometry
 from engine.export.json_export import artifact_to_json
 from engine.hubs import generate_hubs
 from engine.models import (
@@ -31,6 +34,7 @@ from engine.models import (
     ParcelLot,
     PedestrianPath,
     Point2D,
+    Polygon2D,
     RiverLine,
     RoadEdgeRecord,
     RoadNetwork,
@@ -46,7 +50,7 @@ from engine.staging import build_stages, generate_building_footprints, generate_
 from engine.terrain.classification import TerrainVisualSurfaces, compute_terrain_classification
 from engine.terrain.contours import extract_contour_lines
 from engine.terrain.generator import generate_terrain_bundle
-from engine.terrain.hydrology import downsample_grid
+from engine.terrain.hydrology import compute_hydrology, downsample_grid
 from engine.terrain.river_area import build_river_area_polygons
 from engine.traffic import assign_edge_flows
 
@@ -64,6 +68,10 @@ class _CoreGenerationContext:
     terrain_visuals: TerrainVisualSurfaces
     contour_lines: List[Any]
     river_areas: List[Any]
+    river_coverage_ratio: float
+    river_area_m2: float
+    main_river_length_m: float
+    river_area_clipped_ratio: float
 
 
 def _grid_to_nested_list(grid: np.ndarray, precision: int = 4) -> List[List[float]]:
@@ -79,6 +87,150 @@ def _point_model(x: float, y: float) -> Point2D:
     return Point2D(x=float(x), y=float(y))
 
 
+def _river_area_stats(
+    extent_m: float,
+    selected_rivers_raw: Sequence[Dict[str, object]],
+    river_areas: Sequence[Any],
+) -> Tuple[float, float, float]:
+    area_union = river_union_geometry(river_areas)
+    river_area_m2 = float(getattr(area_union, "area", 0.0) or 0.0)
+    denom = max(float(extent_m) * float(extent_m), 1e-9)
+    coverage = float(river_area_m2 / denom)
+    main_len = 0.0
+    if selected_rivers_raw:
+        main = max(selected_rivers_raw, key=lambda r: float(r.get("flow", 0.0)))
+        main_len = float(main.get("length_m", 0.0))
+    return coverage, river_area_m2, main_len
+
+
+def _polygon2d_from_shapely(poly: BaseGeometry, poly_id: str) -> Polygon2D | None:
+    if poly.is_empty:
+        return None
+    geom = poly
+    if not getattr(geom, "is_valid", True):
+        geom = geom.buffer(0)
+    if geom.is_empty:
+        return None
+    if geom.geom_type == "MultiPolygon":
+        geoms = list(getattr(geom, "geoms", []))
+        if not geoms:
+            return None
+        geom = max(geoms, key=lambda g: float(getattr(g, "area", 0.0) or 0.0))
+    if geom.geom_type != "Polygon":
+        return None
+    coords = list(geom.exterior.coords)
+    if len(coords) < 4:
+        return None
+    return Polygon2D(id=poly_id, points=[Point2D(x=float(x), y=float(y)) for x, y in coords[:-1]])
+
+
+def _build_visual_envelope(
+    extent_m: float,
+    hubs: Sequence[HubRecord],
+    road_network: RoadNetwork,
+) -> tuple[Polygon2D, float]:
+    boundary = box(0.0, 0.0, float(extent_m), float(extent_m))
+    node_lookup = {n.id: n for n in road_network.nodes}
+    pts: list[tuple[float, float]] = []
+    for hub in hubs:
+        pts.append((float(hub.x), float(hub.y)))
+    for edge in road_network.edges:
+        path_points = edge.path_points or []
+        if path_points:
+            pts.extend((float(p.x), float(p.y)) for p in path_points)
+            continue
+        u = node_lookup.get(edge.u)
+        v = node_lookup.get(edge.v)
+        if u is not None:
+            pts.append((float(u.x), float(u.y)))
+        if v is not None:
+            pts.append((float(v.x), float(v.y)))
+
+    if len(pts) < 3:
+        fallback = _polygon2d_from_shapely(boundary, "visual-envelope")
+        assert fallback is not None
+        return fallback, 1.0
+
+    hull = MultiPoint(pts).convex_hull
+    geom = hull
+    if geom.geom_type != "Polygon":
+        geom = geom.buffer(300.0)
+    else:
+        geom = geom.buffer(300.0, join_style=2)
+    geom = geom.intersection(boundary)
+    geom = geom.buffer(0)
+    model = _polygon2d_from_shapely(geom, "visual-envelope")
+    if model is None:
+        fallback = _polygon2d_from_shapely(boundary, "visual-envelope")
+        assert fallback is not None
+        return fallback, 1.0
+    area_ratio = max(0.0, min(1.0, float(getattr(geom, "area", 0.0) or 0.0) / max(extent_m * extent_m, 1e-9)))
+    return model, area_ratio
+
+
+def _build_adaptive_rivers(config: GenerateConfig, terrain_bundle: Any) -> Tuple[List[Dict[str, object]], List[Any], float, float, float, float]:
+    width_scale = 1.0
+    hydrology = terrain_bundle.hydrology
+    selected_rivers_raw, river_areas, river_meta = build_river_area_polygons(
+        hydrology.river_polylines,
+        max_branches=2,
+        width_scale=width_scale,
+        clip_extent_m=float(config.extent_m),
+        min_area_m2=5_000.0,
+        return_meta=True,
+    )
+    coverage, river_area_m2, main_len = _river_area_stats(config.extent_m, selected_rivers_raw, river_areas)
+    pre_clip_area = float(river_meta.get("pre_clip_area_m2", 0.0))
+    clipped_ratio = float(river_meta.get("post_clip_area_m2", 0.0) / pre_clip_area) if pre_clip_area > 1e-9 else 1.0
+
+    target_ratio = 0.20
+    min_ratio = 0.10
+    max_ratio = 0.30
+    accum_threshold = float(config.hydrology.accum_threshold)
+
+    for _ in range(4):
+        if min_ratio <= coverage <= max_ratio and river_areas:
+            break
+        if (not river_areas or coverage < min_ratio) and config.hydrology.enable:
+            accum_threshold = max(1e-5, accum_threshold * 0.75)
+            hydrology = compute_hydrology(
+                height=terrain_bundle.height,
+                extent_m=config.extent_m,
+                enabled=config.hydrology.enable,
+                accum_threshold=accum_threshold,
+                min_river_length_m=config.hydrology.min_river_length_m,
+            )
+            terrain_bundle.hydrology = hydrology
+        # Width-scale adaptation (soft constraint)
+        coverage_safe = max(coverage, 1e-6)
+        width_scale = min(200.0, max(0.6, width_scale * (target_ratio / coverage_safe)))
+        if coverage > max_ratio:
+            # If too large, also raise threshold slightly to thin tributaries before retry.
+            accum_threshold = min(0.25, accum_threshold * 1.15)
+            if config.hydrology.enable:
+                hydrology = compute_hydrology(
+                    height=terrain_bundle.height,
+                    extent_m=config.extent_m,
+                    enabled=config.hydrology.enable,
+                    accum_threshold=accum_threshold,
+                    min_river_length_m=config.hydrology.min_river_length_m,
+                )
+                terrain_bundle.hydrology = hydrology
+        selected_rivers_raw, river_areas, river_meta = build_river_area_polygons(
+            hydrology.river_polylines,
+            max_branches=2,
+            width_scale=width_scale,
+            clip_extent_m=float(config.extent_m),
+            min_area_m2=5_000.0,
+            return_meta=True,
+        )
+        coverage, river_area_m2, main_len = _river_area_stats(config.extent_m, selected_rivers_raw, river_areas)
+        pre_clip_area = float(river_meta.get("pre_clip_area_m2", 0.0))
+        clipped_ratio = float(river_meta.get("post_clip_area_m2", 0.0) / pre_clip_area) if pre_clip_area > 1e-9 else 1.0
+
+    return selected_rivers_raw, river_areas, coverage, river_area_m2, main_len, clipped_ratio
+
+
 def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
     terrain_bundle = generate_terrain_bundle(
         resolution=config.grid_resolution,
@@ -89,6 +241,11 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         hydrology_enabled=config.hydrology.enable,
         accum_threshold=config.hydrology.accum_threshold,
         min_river_length_m=config.hydrology.min_river_length_m,
+    )
+
+    selected_rivers_raw, river_areas, river_coverage_ratio, river_area_m2, main_river_length_m, river_area_clipped_ratio = _build_adaptive_rivers(
+        config,
+        terrain_bundle,
     )
 
     hub_result = generate_hubs(
@@ -113,11 +270,6 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         slope_penalty=config.roads.slope_penalty,
         river_cross_penalty=config.roads.river_cross_penalty,
         seed=config.seed,
-    )
-
-    selected_rivers_raw, river_areas = build_river_area_polygons(
-        terrain_bundle.hydrology.river_polylines,
-        max_branches=2,
     )
     terrain_visuals = compute_terrain_classification(
         height=terrain_bundle.height,
@@ -151,6 +303,10 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         terrain_visuals=terrain_visuals,
         contour_lines=contour_lines,
         river_areas=river_areas,
+        river_coverage_ratio=river_coverage_ratio,
+        river_area_m2=river_area_m2,
+        main_river_length_m=main_river_length_m,
+        river_area_clipped_ratio=river_area_clipped_ratio,
     )
 
 
@@ -225,10 +381,12 @@ def _build_city_artifact_from_core(
             river_crossings=int(e.river_crossings),
             width_m=float(getattr(e, "width_m", 8.0)),
             render_order=int(getattr(e, "render_order", 1)),
+            path_points=[Point2D(x=float(p.x), y=float(p.y)) for p in getattr(e, "path_points", [])] or None,
         )
         for e in ctx.road_result.edges
     ]
     road_network = RoadNetwork(nodes=road_nodes, edges=road_edges)
+    visual_envelope, visual_envelope_area_ratio = _build_visual_envelope(float(config.extent_m), hubs, road_network)
 
     debug_layers = DebugLayers(
         candidate_edges=[
@@ -245,6 +403,13 @@ def _build_city_artifact_from_core(
     )
 
     metric_values = ctx.road_result.metrics
+    metric_notes = [
+        "Terrain heights are returned as preview grid for web rendering.",
+        "Hydrology uses D8 flow accumulation (MVP simplified model).",
+    ]
+    if ctx.river_area_clipped_ratio < 0.6:
+        metric_notes.append("River buffer geometry was heavily clipped to study boundary.")
+
     metrics = Metrics(
         hub_count=len(hubs),
         road_node_count=len(road_nodes),
@@ -257,11 +422,13 @@ def _build_city_artifact_from_core(
         illegal_intersection_count=int(metric_values.get("illegal_intersection_count", 0.0)),
         bridge_count=int(metric_values.get("bridge_count", 0.0)),
         river_count=len(rivers),
+        river_coverage_ratio=float(ctx.river_coverage_ratio),
+        main_river_length_m=float(ctx.main_river_length_m),
+        river_area_m2=float(ctx.river_area_m2),
+        river_area_clipped_ratio=float(ctx.river_area_clipped_ratio),
+        visual_envelope_area_ratio=float(visual_envelope_area_ratio),
         avg_edge_weight=float(metric_values.get("avg_edge_weight", 0.0)),
-        notes=[
-            "Terrain heights are returned as preview grid for web rendering.",
-            "Hydrology uses D8 flow accumulation (MVP simplified model).",
-        ],
+        notes=metric_notes,
     )
 
     meta = ArtifactMeta(
@@ -277,6 +444,7 @@ def _build_city_artifact_from_core(
         terrain=terrain_model,
         rivers=rivers,
         river_areas=list(ctx.river_areas),
+        visual_envelope=visual_envelope,
         hubs=hubs,
         roads=road_network,
         metrics=metrics,
