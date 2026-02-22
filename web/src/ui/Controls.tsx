@@ -15,8 +15,26 @@ type Props = {
     roads: boolean;
     debugCandidates: boolean;
     labels: boolean;
+    analysis: boolean;
+    resources: boolean;
+    traffic: boolean;
+    buildings: boolean;
+    greenZones: boolean;
   };
   onLayerToggle: (key: keyof Props['layers']) => void;
+};
+
+const LAYER_LABELS: Record<string, string> = {
+  terrain: 'Terrain',
+  rivers: 'Rivers',
+  roads: 'Roads',
+  debugCandidates: 'Candidate Edges',
+  labels: 'Labels',
+  analysis: 'Analysis Heatmaps',
+  resources: 'Resource Sites',
+  traffic: 'Traffic Heat',
+  buildings: 'Buildings',
+  greenZones: 'Green Zones',
 };
 
 export function Controls({
@@ -141,7 +159,7 @@ export function Controls({
         {Object.entries(layers).map(([key, value]) => (
           <label key={key} className="checkbox-row compact">
             <input type="checkbox" checked={value} onChange={() => onLayerToggle(key as keyof Props['layers'])} />
-            <span>{key}</span>
+            <span>{LAYER_LABELS[key] ?? key}</span>
           </label>
         ))}
       </div>

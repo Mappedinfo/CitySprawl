@@ -5,8 +5,8 @@ from typing import Any, Dict
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from engine.generator import generate_city
-from engine.models import CityArtifact, GenerateConfig
+from engine.generator import generate_city, generate_city_staged
+from engine.models import CityArtifact, GenerateConfig, StagedCityResponse
 from engine.pydantic_compat import model_json_schema
 
 
@@ -67,6 +67,10 @@ def create_app() -> FastAPI:
     @app.post("/api/v1/generate", response_model=CityArtifact)
     def generate(payload: GenerateConfig) -> CityArtifact:
         return generate_city(payload)
+
+    @app.post("/api/v1/generate_staged", response_model=StagedCityResponse)
+    def generate_staged(payload: GenerateConfig) -> StagedCityResponse:
+        return generate_city_staged(payload)
 
     return app
 

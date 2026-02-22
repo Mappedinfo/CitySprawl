@@ -67,6 +67,11 @@ class Polyline2D(StrictModel):
     points: List[Point2D]
 
 
+class Polygon2D(StrictModel):
+    id: str
+    points: List[Point2D]
+
+
 class TerrainLayer(StrictModel):
     extent_m: float
     resolution: int
@@ -114,6 +119,29 @@ class RoadNetwork(StrictModel):
     edges: List[RoadEdgeRecord]
 
 
+class ResourceSite(StrictModel):
+    id: str
+    x: float
+    y: float
+    kind: str
+    quality: float
+    influence_radius_m: float
+
+
+class TrafficEdgeFlow(StrictModel):
+    edge_id: str
+    flow: float
+    capacity: float
+    congestion_ratio: float
+    road_class: str
+
+
+class BuildingFootprint(StrictModel):
+    id: str
+    points: List[Point2D]
+    height_hint: float = 1.0
+
+
 class DebugSegment(StrictModel):
     id: str
     a: Point2D
@@ -159,3 +187,36 @@ class CityArtifact(StrictModel):
     roads: RoadNetwork
     metrics: Metrics
     debug_layers: DebugLayers
+
+
+class StageCaption(StrictModel):
+    text: str
+    text_zh: Optional[str] = None
+
+
+class StageLayersSnapshot(StrictModel):
+    suitability_preview: Optional[List[List[float]]] = None
+    flood_risk_preview: Optional[List[List[float]]] = None
+    population_potential_preview: Optional[List[List[float]]] = None
+    resource_sites: List[ResourceSite] = Field(default_factory=list)
+    traffic_edge_flows: List[TrafficEdgeFlow] = Field(default_factory=list)
+    building_footprints: List[BuildingFootprint] = Field(default_factory=list)
+    green_zones_preview: Optional[List[List[float]]] = None
+
+
+class StageArtifact(StrictModel):
+    stage_id: str
+    title: str
+    title_zh: str
+    subtitle: str
+    subtitle_zh: str
+    timestamp_ms: int
+    visible_layers: List[str] = Field(default_factory=list)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    caption: Optional[StageCaption] = None
+    layers: StageLayersSnapshot = Field(default_factory=StageLayersSnapshot)
+
+
+class StagedCityResponse(StrictModel):
+    final_artifact: CityArtifact
+    stages: List[StageArtifact]

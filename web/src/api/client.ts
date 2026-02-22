@@ -1,4 +1,4 @@
-import type { CityArtifact, GenerateConfig, PresetsResponse } from '../types/city';
+import type { CityArtifact, GenerateConfig, PresetsResponse, StagedCityResponse } from '../types/city';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
 
@@ -22,6 +22,15 @@ export async function fetchPresets(): Promise<PresetsResponse> {
 
 export async function generateCity(config: GenerateConfig): Promise<CityArtifact> {
   const res = await fetch(`${API_BASE}/api/v1/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  return parseJson(res);
+}
+
+export async function generateCityStaged(config: GenerateConfig): Promise<StagedCityResponse> {
+  const res = await fetch(`${API_BASE}/api/v1/generate_staged`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),

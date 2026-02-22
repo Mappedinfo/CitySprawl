@@ -31,6 +31,9 @@ export type GenerateConfig = {
 
 export type Point2D = { x: number; y: number };
 
+export type Polyline2D = { id: string; points: Point2D[] };
+export type Polygon2D = { id: string; points: Point2D[] };
+
 export type RiverLine = {
   id: string;
   points: Point2D[];
@@ -63,6 +66,29 @@ export type RoadEdgeRecord = {
   weight: number;
   length_m: number;
   river_crossings: number;
+};
+
+export type ResourceSite = {
+  id: string;
+  x: number;
+  y: number;
+  kind: string;
+  quality: number;
+  influence_radius_m: number;
+};
+
+export type TrafficEdgeFlow = {
+  edge_id: string;
+  flow: number;
+  capacity: number;
+  congestion_ratio: number;
+  road_class: string;
+};
+
+export type BuildingFootprint = {
+  id: string;
+  points: Point2D[];
+  height_hint: number;
 };
 
 export type CityArtifact = {
@@ -106,6 +132,39 @@ export type CityArtifact = {
     suitability_preview?: number[][] | null;
     accumulation_preview?: number[][] | null;
   };
+};
+
+export type StageCaption = {
+  text: string;
+  text_zh?: string | null;
+};
+
+export type StageLayersSnapshot = {
+  suitability_preview?: number[][] | null;
+  flood_risk_preview?: number[][] | null;
+  population_potential_preview?: number[][] | null;
+  resource_sites?: ResourceSite[];
+  traffic_edge_flows?: TrafficEdgeFlow[];
+  building_footprints?: BuildingFootprint[];
+  green_zones_preview?: number[][] | null;
+};
+
+export type StageArtifact = {
+  stage_id: 'terrain' | 'analysis' | 'infrastructure' | 'traffic' | 'final_preview' | string;
+  title: string;
+  title_zh: string;
+  subtitle: string;
+  subtitle_zh: string;
+  timestamp_ms: number;
+  visible_layers: string[];
+  metrics: Record<string, string | number | boolean | null>;
+  caption?: StageCaption | null;
+  layers: StageLayersSnapshot;
+};
+
+export type StagedCityResponse = {
+  final_artifact: CityArtifact;
+  stages: StageArtifact[];
 };
 
 export type PresetsResponse = Record<string, GenerateConfig>;

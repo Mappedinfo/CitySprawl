@@ -37,6 +37,35 @@ def test_generate_success():
     assert "metrics" in body
 
 
+def test_generate_staged_success():
+    payload = {
+        "seed": 8,
+        "grid_resolution": 96,
+        "terrain": {"noise_octaves": 4, "relief_strength": 1.0},
+        "hydrology": {"enable": True, "accum_threshold": 0.02, "min_river_length_m": 80.0},
+        "hubs": {"t1_count": 1, "t2_count": 2, "t3_count": 8, "min_distance_m": 80.0},
+        "roads": {"k_neighbors": 4, "loop_budget": 2, "branch_steps": 1, "slope_penalty": 2.0, "river_cross_penalty": 200.0},
+        "naming": {"provider": "mock"},
+    }
+    res = client.post("/api/v1/generate_staged", json=payload)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["final_artifact"]["meta"]["seed"] == 8
+    assert [s["stage_id"] for s in body["stages"]] == [
+        "terrain",
+        "analysis",
+        "infrastructure",
+        "traffic",
+        "final_preview",
+    ]
+    assert body["stages"][3]["layers"]["traffic_edge_flows"]
+
+
 def test_generate_validation_error():
     res = client.post("/api/v1/generate", json={"seed": -1})
+    assert res.status_code == 422
+
+
+def test_generate_staged_validation_error():
+    res = client.post("/api/v1/generate_staged", json={"seed": -1})
     assert res.status_code == 422

@@ -18,15 +18,12 @@ export function drawCity(
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
 
-  // Background gradient fallback.
-  const gradient = ctx.createLinearGradient(0, 0, width, height);
-  gradient.addColorStop(0, '#e8f0df');
-  gradient.addColorStop(1, '#c4d4b5');
-  ctx.fillStyle = gradient;
+  // Solid fallback background (UI shell avoids gradients by design).
+  ctx.fillStyle = 'rgba(6, 14, 24, 1)';
   ctx.fillRect(0, 0, width, height);
 
   if (!artifact) {
-    ctx.fillStyle = '#223';
+    ctx.fillStyle = 'rgba(188, 242, 255, 0.85)';
     ctx.font = '14px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.fillText('No artifact loaded.', 16, 24);
     return;
@@ -47,7 +44,7 @@ export function drawCity(
 
   if (layers.debugCandidates) {
     ctx.save();
-    ctx.strokeStyle = 'rgba(40,40,40,0.18)';
+    ctx.strokeStyle = 'rgba(110, 200, 255, 0.14)';
     ctx.lineWidth = Math.max(0.6, 0.8 * viewport.scale);
     for (const seg of artifact.debug_layers.candidate_edges) {
       const a = worldToScreen(seg.a.x, seg.a.y, extent, width, height, viewport);
@@ -62,7 +59,7 @@ export function drawCity(
 
   if (layers.rivers) {
     ctx.save();
-    ctx.strokeStyle = 'rgba(48, 118, 196, 0.9)';
+    ctx.strokeStyle = 'rgba(72, 190, 255, 0.92)';
     ctx.lineCap = 'round';
     for (const river of artifact.rivers) {
       if (river.points.length < 2) continue;
@@ -88,14 +85,14 @@ export function drawCity(
       if (!u || !v) continue;
       const a = worldToScreen(u.x, u.y, extent, width, height, viewport);
       const b = worldToScreen(v.x, v.y, extent, width, height, viewport);
-      ctx.strokeStyle = edge.road_class === 'arterial' ? 'rgba(33, 32, 30, 0.95)' : 'rgba(78, 68, 58, 0.75)';
-      ctx.lineWidth = edge.road_class === 'arterial' ? 2.2 : 1.2;
+      ctx.strokeStyle = edge.road_class === 'arterial' ? 'rgba(234, 247, 255, 0.96)' : 'rgba(143, 226, 255, 0.72)';
+      ctx.lineWidth = edge.road_class === 'arterial' ? 2.2 : 1.15;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
       if (edge.river_crossings > 0) {
-        ctx.fillStyle = 'rgba(240, 205, 95, 0.95)';
+        ctx.fillStyle = 'rgba(255, 196, 78, 0.95)';
         ctx.beginPath();
         ctx.arc((a.x + b.x) / 2, (a.y + b.y) / 2, 2.1, 0, Math.PI * 2);
         ctx.fill();
