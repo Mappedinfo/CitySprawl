@@ -34,6 +34,9 @@ type StageSource = 'none' | 'staged' | 'fallback';
 
 type LayerState = LayerToggles;
 
+// Default zoom multiplier for initial view - shows only part of the scene like a game
+const DEFAULT_ZOOM_MULTIPLIER = 2.2;
+
 function fitViewportToArtifact(
   artifact: CityArtifact,
   cssWidth: number,
@@ -79,9 +82,10 @@ function fitViewportToArtifact(
   if (!pts.length) pts.push(...fallbackPts);
 
   if (!pts.length || cssWidth <= 0 || cssHeight <= 0) {
-    return { panX: 0, panY: 0, scale: 1 };
+    return { panX: 0, panY: 0, scale: DEFAULT_ZOOM_MULTIPLIER };
   }
 
+  // Find bounding box of city content
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -93,27 +97,25 @@ function fitViewportToArtifact(
     maxY = Math.max(maxY, p.y);
   }
 
-  // Expand bounds slightly to include labels and line widths.
-  const padWorldX = Math.max(160, (maxX - minX) * 0.12);
-  const padWorldY = Math.max(160, (maxY - minY) * 0.12);
-  minX = Math.max(0, minX - padWorldX);
-  minY = Math.max(0, minY - padWorldY);
-  maxX = Math.min(extent, maxX + padWorldX);
-  maxY = Math.min(extent, maxY + padWorldY);
-
-  const spanX = Math.max(1, maxX - minX);
-  const spanY = Math.max(1, maxY - minY);
-  const margin = 0.08;
-  const scaleX = ((1 - margin * 2) * extent) / spanX;
-  const scaleY = ((1 - margin * 2) * extent) / spanY;
-  const scale = clampScale(Math.min(scaleX, scaleY));
-
+  // Center of city content in world coordinates
   const cx = (minX + maxX) * 0.5;
   const cy = (minY + maxY) * 0.5;
-  const screenX = (cx / extent) * cssWidth;
-  const screenY = cssHeight - (cy / extent) * cssHeight;
-  const panX = cssWidth * 0.5 - screenX * scale;
-  const panY = cssHeight * 0.5 - screenY * scale;
+
+  // Use a zoomed-in scale (game-like view showing only part of the scene)
+  const scale = clampScale(DEFAULT_ZOOM_MULTIPLIER);
+
+  // Compute fit parameters for coordinate conversion
+  const fitScale = Math.min(cssWidth, cssHeight) / extent;
+  const offsetX = (cssWidth - extent * fitScale) / 2;
+  const offsetY = (cssHeight - extent * fitScale) / 2;
+
+  // Convert world center to base screen position (before viewport transform)
+  const baseScreenX = cx * fitScale + offsetX;
+  const baseScreenY = (extent - cy) * fitScale + offsetY;
+
+  // Calculate pan to center the city content on screen
+  const panX = cssWidth * 0.5 - baseScreenX * scale;
+  const panY = cssHeight * 0.5 - baseScreenY * scale;
 
   return { panX, panY, scale };
 }
@@ -363,7 +365,7 @@ export default function App() {
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
 
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+  const handleWheel = (e: WheelEvent) => {
     e.preventDefault();
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
@@ -381,6 +383,16 @@ export default function App() {
       };
     });
   };
+
+  // Attach wheel event with passive: false to allow preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      canvas.removeEventListener('wheel', handleWheel);
+    };
+  }, []);
 
   const handleOverlayClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!artifact || !wrapperRef.current) return;
@@ -444,7 +456,6 @@ export default function App() {
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
-            onWheel={handleWheel}
           />
 
           {artifact ? (

@@ -54,16 +54,22 @@ function buildTerrainMesh(artifact: CityArtifact): THREE.Mesh | null {
   const terrainClasses = artifact.terrain.terrain_class_preview;
   const hillshade = artifact.terrain.hillshade_preview;
 
+  // PlaneGeometry vertices are ordered from top-left, row by row (top to bottom).
+  // heights array has y=0 at world bottom, so we need to flip the Y mapping:
+  // Geometry row 0 (top) should map to heights row (rows-1) (world top).
   let k = 0;
-  for (let y = 0; y < rows; y += 1) {
+  for (let geoRow = 0; geoRow < rows; geoRow += 1) {
     for (let x = 0; x < cols; x += 1) {
+      // Map geometry row to heights row: geoRow=0 -> heightsY=rows-1, geoRow=rows-1 -> heightsY=0
+      const heightsY = rows - 1 - geoRow;
       const wx = (x / Math.max(cols - 1, 1)) * extent;
-      const wy = (y / Math.max(rows - 1, 1)) * extent;
-      const z = (heights[y]?.[x] ?? 0) * TERRAIN_EXAGGERATION;
+      // World Y: heightsY=0 -> wy=0 (bottom), heightsY=rows-1 -> wy=extent (top)
+      const wy = (heightsY / Math.max(rows - 1, 1)) * extent;
+      const z = (heights[heightsY]?.[x] ?? 0) * TERRAIN_EXAGGERATION;
       pos.setXYZ(k, wx, wy, z);
 
-      const cls = terrainClasses?.[y]?.[x] ?? 1;
-      const shade = hillshade?.[y]?.[x] ?? 0.5;
+      const cls = terrainClasses?.[heightsY]?.[x] ?? 1;
+      const shade = hillshade?.[heightsY]?.[x] ?? 0.5;
       const c = classColor(cls, shade);
       colors[k * 3 + 0] = c.r;
       colors[k * 3 + 1] = c.g;
