@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/api/client.ts","./src/render/cityrenderer.ts","./src/render/terrainimage.ts","./src/render/viewport.ts","./src/types/city.ts","./src/ui/controls.tsx","./src/ui/metricspanel.tsx"],"version":"5.9.3"}

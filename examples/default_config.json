@@ -1,0 +1,10 @@
+{
+  "seed": 42,
+  "extent_m": 2048,
+  "grid_resolution": 256,
+  "terrain": {"noise_octaves": 5, "relief_strength": 1.0},
+  "hydrology": {"enable": true, "accum_threshold": 0.015, "min_river_length_m": 120.0},
+  "hubs": {"t1_count": 1, "t2_count": 4, "t3_count": 20, "min_distance_m": 120.0},
+  "roads": {"k_neighbors": 4, "loop_budget": 3, "branch_steps": 2, "slope_penalty": 2.0, "river_cross_penalty": 300.0},
+  "naming": {"provider": "mock"}
+}
