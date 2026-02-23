@@ -11,11 +11,16 @@ type Props = {
   onSelectStage: (idx: number) => void;
 };
 
-function fmt(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const ss = String(s % 60).padStart(2, '0');
-  return `${m}:${ss}`;
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+function stageProgress(stages: StageArtifact[], idx: number, currentTimeMs: number, totalMs: number): number {
+  const start = stages[idx]?.timestamp_ms ?? 0;
+  const end = idx < stages.length - 1 ? (stages[idx + 1]?.timestamp_ms ?? totalMs) : totalMs;
+  if (currentTimeMs <= start) return 0;
+  if (currentTimeMs >= end) return 1;
+  return clamp01((currentTimeMs - start) / Math.max(end - start, 1));
 }
 
 export function TimelinePlayer({
@@ -24,47 +29,57 @@ export function TimelinePlayer({
   currentTimeMs,
   totalMs,
   playing,
-  onTogglePlay,
-  onSeek,
   onSelectStage,
 }: Props) {
+  if (!stages.length) return null;
+
   return (
     <div className="hud-panel timeline-panel">
-      <div className="timeline-top">
-        <button className="hud-btn" onClick={onTogglePlay} type="button">
-          {playing ? 'Pause' : 'Play'}
-        </button>
-        <div className="timeline-readout">
-          <span>{fmt(currentTimeMs)}</span>
-          <span>/</span>
-          <span>{fmt(totalMs)}</span>
+      <div className="timeline-top timeline-top-compact">
+        <div className="timeline-title-stack">
+          <span className="timeline-title">Growth Steps</span>
+          <span className="timeline-subtitle">{playing ? 'Auto-growing' : 'Click a step to inspect'}</span>
         </div>
+        <div className={`timeline-auto-pill ${playing ? 'is-playing' : ''}`}>{playing ? 'AUTO' : 'PAUSED'}</div>
       </div>
 
-      <input
-        className="timeline-slider"
-        type="range"
-        min={0}
-        max={totalMs}
-        step={10}
-        value={Math.round(currentTimeMs)}
-        onChange={(e) => onSeek(Number(e.target.value))}
-      />
-
-      <div className="timeline-stages">
-        {stages.map((stage, idx) => (
-          <button
-            key={`${stage.stage_id}-${idx}`}
-            type="button"
-            className={`stage-chip ${idx === currentStageIndex ? 'is-active' : ''}`}
-            onClick={() => onSelectStage(idx)}
-            title={stage.title}
-          >
-            <span className="chip-index">{idx + 1}</span>
-            <span className="chip-label">{stage.title_zh}</span>
-            <span className="chip-sub">{stage.title}</span>
-          </button>
-        ))}
+      <div className="timeline-step-rail" role="tablist" aria-label="City growth steps">
+        {stages.map((stage, idx) => {
+          const localProgress = stageProgress(stages, idx, currentTimeMs, totalMs);
+          const isActive = idx === currentStageIndex;
+          const isDone = idx < currentStageIndex || (idx === currentStageIndex && localProgress >= 0.999);
+          const isReached = idx <= currentStageIndex;
+          return (
+            <button
+              key={`${stage.stage_id}-${idx}`}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              className={[
+                'timeline-step-button',
+                isActive ? 'is-active' : '',
+                isDone ? 'is-done' : '',
+                isReached ? 'is-reached' : 'is-pending',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              onClick={() => onSelectStage(idx)}
+              title={`${idx + 1}. ${stage.title_zh} (${stage.title})`}
+            >
+              <div className="timeline-step-bead-row" aria-hidden="true">
+                <span className="timeline-step-bead" />
+                <span className="timeline-step-mini-track">
+                  <span className="timeline-step-mini-fill" style={{ width: `${Math.round(localProgress * 100)}%` }} />
+                </span>
+              </div>
+              <div className="timeline-step-meta">
+                <span className="timeline-step-index">{idx + 1}</span>
+                <span className="timeline-step-label">{stage.title_zh}</span>
+                <span className="timeline-step-sub">{stage.title}</span>
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

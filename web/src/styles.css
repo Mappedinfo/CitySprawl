@@ -240,6 +240,10 @@ button:disabled {
   color: var(--accent-2);
 }
 
+.mode-json {
+  color: #9cff8f;
+}
+
 .stage-pill {
   display: grid;
   gap: 1px;
@@ -322,20 +326,89 @@ button:disabled {
   font-size: 0.78rem;
 }
 
-.progress-bar-track {
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(8, 12, 20, 0.8);
-  border: 1px solid rgba(108, 223, 255, 0.14);
-  overflow: hidden;
+.backend-step-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 6px;
 }
 
-.progress-bar-fill {
+.backend-step-item {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 6px 6px 5px;
+  border-radius: 10px;
+  border: 1px solid rgba(108, 223, 255, 0.08);
+  background: rgba(8, 12, 20, 0.42);
+}
+
+.backend-step-item.is-active,
+.backend-step-item.is-done {
+  border-color: rgba(124, 255, 188, 0.24);
+  background: rgba(10, 20, 16, 0.45);
+}
+
+.backend-step-bead-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.backend-step-bead {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(160, 170, 180, 0.28);
+  border: 1px solid rgba(180, 190, 200, 0.22);
+  flex: 0 0 auto;
+}
+
+.backend-step-item.is-active .backend-step-bead,
+.backend-step-item.is-done .backend-step-bead {
+  background: rgba(110, 255, 160, 0.95);
+  border-color: rgba(110, 255, 160, 0.8);
+  box-shadow: 0 0 10px rgba(110, 255, 160, 0.24);
+}
+
+.backend-step-mini-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(140, 150, 160, 0.15);
+  border: 1px solid rgba(140, 150, 160, 0.12);
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.backend-step-mini-fill {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, rgba(92, 238, 255, 0.65), rgba(255, 196, 88, 0.8));
-  box-shadow: 0 0 14px rgba(92, 238, 255, 0.16);
-  transition: width 160ms linear;
+  background: linear-gradient(90deg, rgba(86, 226, 148, 0.82), rgba(134, 255, 187, 0.95));
+  width: 0%;
+  transition: width 120ms linear;
+}
+
+.backend-step-labels {
+  display: grid;
+  gap: 1px;
+}
+
+.backend-step-label-zh {
+  color: var(--ink);
+  font-size: 0.68rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.backend-step-label-en {
+  color: var(--ink-dim);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .progress-message {
@@ -612,6 +685,44 @@ button:disabled {
   gap: 10px;
 }
 
+.timeline-top-compact {
+  align-items: flex-start;
+}
+
+.timeline-title-stack {
+  display: grid;
+  gap: 2px;
+}
+
+.timeline-title {
+  color: var(--ink);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.timeline-subtitle {
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+}
+
+.timeline-auto-pill {
+  width: auto;
+  border-radius: 999px;
+  border: 1px solid rgba(160, 170, 180, 0.2);
+  background: rgba(8, 12, 20, 0.62);
+  color: var(--ink-dim);
+  padding: 4px 8px;
+  font-size: 0.68rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.06em;
+}
+
+.timeline-auto-pill.is-playing {
+  border-color: rgba(110, 255, 160, 0.32);
+  color: rgba(134, 255, 187, 0.95);
+}
+
 .timeline-readout {
   display: flex;
   gap: 6px;
@@ -630,6 +741,102 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
+}
+
+.timeline-step-rail {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.timeline-step-button {
+  text-align: left;
+  width: 100%;
+  background: rgba(8, 13, 21, 0.76);
+  border: 1px solid rgba(108, 223, 255, 0.12);
+  border-radius: 10px;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.timeline-step-button.is-reached {
+  border-color: rgba(110, 255, 160, 0.18);
+  background: rgba(9, 17, 14, 0.72);
+}
+
+.timeline-step-button.is-active {
+  border-color: rgba(110, 255, 160, 0.45);
+  box-shadow: 0 0 0 1px rgba(110, 255, 160, 0.12) inset, 0 0 14px rgba(110, 255, 160, 0.08);
+}
+
+.timeline-step-bead-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timeline-step-bead {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(150, 160, 170, 0.28);
+  border: 1px solid rgba(180, 190, 200, 0.22);
+  flex: 0 0 auto;
+}
+
+.timeline-step-button.is-reached .timeline-step-bead {
+  background: rgba(110, 255, 160, 0.9);
+  border-color: rgba(110, 255, 160, 0.75);
+  box-shadow: 0 0 10px rgba(110, 255, 160, 0.22);
+}
+
+.timeline-step-mini-track {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(130, 140, 150, 0.16);
+  border: 1px solid rgba(130, 140, 150, 0.1);
+  overflow: hidden;
+}
+
+.timeline-step-mini-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(86, 226, 148, 0.8), rgba(130, 255, 183, 0.95));
+  transition: width 120ms linear;
+}
+
+.timeline-step-meta {
+  display: grid;
+  gap: 1px;
+}
+
+.timeline-step-index {
+  color: rgba(134, 255, 187, 0.92);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+}
+
+.timeline-step-label {
+  color: var(--ink);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeline-step-sub {
+  color: var(--ink-dim);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stage-chip {
@@ -707,6 +914,15 @@ button:disabled {
 
 .source-fallback {
   color: var(--accent-2);
+}
+
+.source-json {
+  color: #9cff8f;
+}
+
+.button-row.single-row {
+  grid-template-columns: 1fr;
+  margin-top: 8px;
 }
 
 .stage-name-stack {
@@ -833,6 +1049,10 @@ button:disabled {
   .timeline-stages {
     grid-template-columns: repeat(5, minmax(80px, 1fr));
   }
+
+  .timeline-step-rail {
+    grid-template-columns: repeat(5, minmax(80px, 1fr));
+  }
 }
 
 @media (max-width: 1100px) {
@@ -865,6 +1085,10 @@ button:disabled {
   }
 
   .timeline-stages {
+    grid-template-columns: 1fr;
+  }
+
+  .timeline-step-rail {
     grid-template-columns: 1fr;
   }
 

@@ -69,7 +69,6 @@ function mergeEvent(state: IncrementalState, event: StreamEvent): IncrementalSta
 
     case 'road_trace_progress':
       if (event.data.complete) {
-        // Move from partial to completed
         next.partialTraces = new Map(state.partialTraces);
         next.partialTraces.delete(event.data.trace_id);
         next.completedTraces = [
@@ -82,7 +81,6 @@ function mergeEvent(state: IncrementalState, event: StreamEvent): IncrementalSta
           },
         ];
       } else {
-        // Update partial trace
         next.partialTraces = new Map(state.partialTraces);
         next.partialTraces.set(event.data.trace_id, event.data.points);
       }
@@ -95,11 +93,23 @@ function mergeEvent(state: IncrementalState, event: StreamEvent): IncrementalSta
     case 'progress':
     case 'stage_complete':
     case 'terrain_milestone':
-      // These don't affect incremental geometry state
       break;
   }
 
   return next;
+}
+
+function isStagedCityResponse(value: unknown): value is StagedCityResponse {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return !!candidate.final_artifact && typeof candidate.final_artifact === 'object' && Array.isArray(candidate.stages);
+}
+
+function splitSseBlocks(buffer: string): { blocks: string[]; remainder: string } {
+  let normalized = buffer.replace(/\r\n/g, '\n');
+  normalized = normalized.replace(/\r/g, '\n');
+  const parts = normalized.split('\n\n');
+  return { blocks: parts.slice(0, -1), remainder: parts[parts.length - 1] ?? '' };
 }
 
 export function useStreamingGeneration() {
@@ -108,36 +118,89 @@ export function useStreamingGeneration() {
   const [status, setStatus] = useState<StreamingStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<StagedCityResponse | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const activeRequestIdRef = useRef(0);
+
+  const abortActiveRequest = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+  }, []);
 
   const reset = useCallback(() => {
+    abortActiveRequest();
     setState(createEmptyState());
     setProgress({ phase: '', progress: 0, message: '' });
     setStatus('idle');
     setError(null);
     setResult(null);
-  }, []);
+  }, [abortActiveRequest]);
 
   const stop = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
+    abortActiveRequest();
     setStatus('idle');
-  }, []);
+  }, [abortActiveRequest]);
 
   const start = useCallback(
     (config: GenerateConfig): Promise<StagedCityResponse | null> => {
       return new Promise((resolve, reject) => {
-        // Reset state
+        const requestId = activeRequestIdRef.current + 1;
+        activeRequestIdRef.current = requestId;
+
         reset();
         setStatus('connecting');
 
-        // Build URL with config as query params (POST body not supported by EventSource)
-        // We'll use POST endpoint with fetch instead
+        const controller = new AbortController();
+        abortRef.current = controller;
+        const isCurrent = () => activeRequestIdRef.current === requestId;
+
         const url = `${API_BASE}/api/v2/generate_stream`;
 
-        // Use fetch with ReadableStream for SSE from POST
+        const handleMessage = (eventName: string, dataText: string): StagedCityResponse | null => {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(dataText);
+          } catch {
+            return null;
+          }
+
+          const data = parsed as Record<string, unknown>;
+
+          if (eventName === 'heartbeat' || data.status === 'connected' || data.status === 'generating') {
+            if (isCurrent()) setStatus('streaming');
+            return null;
+          }
+
+          if (Array.isArray(data.events)) {
+            if (isCurrent()) setStatus('streaming');
+            for (const item of data.events) {
+              const event = item as StreamEvent;
+              if (event.event_type === 'progress') {
+                if (isCurrent()) setProgress(event.data);
+              } else {
+                if (isCurrent()) setState((prev) => mergeEvent(prev, event));
+              }
+            }
+          }
+
+          if (eventName === 'complete' || data.stream_complete === true) {
+            if (isStagedCityResponse(parsed)) return parsed;
+            if (data.result && isStagedCityResponse(data.result)) return data.result;
+          }
+
+          if (data.error || eventName === 'error') {
+            const errorMsg = String(data.error ?? 'Unknown error');
+            if (isCurrent()) {
+              setError(errorMsg);
+              setStatus('error');
+            }
+            throw new Error(errorMsg);
+          }
+
+          return null;
+        };
+
         fetch(url, {
           method: 'POST',
           headers: {
@@ -145,95 +208,102 @@ export function useStreamingGeneration() {
             Accept: 'text/event-stream',
           },
           body: JSON.stringify(config),
+          signal: controller.signal,
         })
           .then(async (response) => {
-            if (!response.ok) {
-              throw new Error(`HTTP error: ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
 
             const reader = response.body?.getReader();
-            if (!reader) {
-              throw new Error('No response body');
-            }
+            if (!reader) throw new Error('No response body');
 
             const decoder = new TextDecoder();
-            let buffer = '';
-            let currentEvent = '';
+            let rawBuffer = '';
             let finalResult: StagedCityResponse | null = null;
 
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
+              if (!isCurrent()) return;
+              if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() ?? '';
+              rawBuffer += decoder.decode(value, { stream: true });
+              const { blocks, remainder } = splitSseBlocks(rawBuffer);
+              rawBuffer = remainder;
 
-              for (const line of lines) {
-                if (line.startsWith('event:')) {
-                  currentEvent = line.slice(6).trim();
-                  continue;
-                }
-                if (line.startsWith('data:')) {
-                  const jsonStr = line.slice(5).trim();
-                  if (!jsonStr) continue;
-
-                  try {
-                    const data = JSON.parse(jsonStr);
-
-                    // Handle heartbeat - update status to streaming on first heartbeat
-                    if (currentEvent === 'heartbeat' || data.status === 'connected' || data.status === 'generating') {
-                      setStatus('streaming');
-                      continue;
-                    }
-
-                    // Handle batch events
-                    if (data.events && Array.isArray(data.events)) {
-                      for (const event of data.events) {
-                        if (event.event_type === 'progress') {
-                          setProgress(event.data);
-                        } else {
-                          setState((prev) => mergeEvent(prev, event));
-                        }
-                      }
-                    }
-
-                    // Handle complete event (final result)
-                    if (data.final_artifact || currentEvent === 'complete') {
-                      finalResult = data as StagedCityResponse;
-                      setResult(finalResult);
-                      setStatus('completed');
-                      resolve(finalResult);
-                      return;
-                    }
-
-                    // Handle error event
-                    if (data.error || currentEvent === 'error') {
-                      const errorMsg = data.error || 'Unknown error';
-                      setError(errorMsg);
-                      setStatus('error');
-                      reject(new Error(errorMsg));
-                      return;
-                    }
-                  } catch {
-                    // Ignore parse errors for partial data
+              for (const block of blocks) {
+                if (!block.trim()) continue;
+                let eventName = '';
+                const dataLines: string[] = [];
+                for (const rawLine of block.split('\n')) {
+                  const line = rawLine.trimEnd();
+                  if (!line || line.startsWith(':')) continue;
+                  if (line.startsWith('event:')) {
+                    eventName = line.slice(6).trim();
+                    continue;
                   }
+                  if (line.startsWith('data:')) {
+                    dataLines.push(line.slice(5).trim());
+                  }
+                }
+                if (!dataLines.length) continue;
+                const maybeResult = handleMessage(eventName, dataLines.join('\n'));
+                if (maybeResult) {
+                  finalResult = maybeResult;
+                  if (isCurrent()) {
+                    setResult(maybeResult);
+                    setStatus('completed');
+                    abortRef.current = null;
+                  }
+                  resolve(maybeResult);
+                  return;
                 }
               }
             }
 
-            // Stream ended without complete event
+            // Flush any trailing bytes and remaining event block.
+            rawBuffer += decoder.decode();
+            const { blocks } = splitSseBlocks(`${rawBuffer}\n\n`);
+            for (const block of blocks) {
+              if (!block.trim()) continue;
+              let eventName = '';
+              const dataLines: string[] = [];
+              for (const rawLine of block.split('\n')) {
+                const line = rawLine.trimEnd();
+                if (!line || line.startsWith(':')) continue;
+                if (line.startsWith('event:')) eventName = line.slice(6).trim();
+                if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+              }
+              if (!dataLines.length) continue;
+              const maybeResult = handleMessage(eventName, dataLines.join('\n'));
+              if (maybeResult) finalResult = maybeResult;
+            }
+
+            if (!isCurrent()) return;
+            abortRef.current = null;
             setStatus('completed');
+            if (finalResult) setResult(finalResult);
             resolve(finalResult);
           })
-          .catch((err) => {
-            setError(err.message);
+          .catch((err: unknown) => {
+            if (!isCurrent()) return;
+            abortRef.current = null;
+            const isAbort =
+              controller.signal.aborted ||
+              (err instanceof DOMException && err.name === 'AbortError') ||
+              (err instanceof Error && err.name === 'AbortError');
+            if (isAbort) {
+              setStatus('idle');
+              reject(err instanceof Error ? err : new Error('Stream aborted'));
+              return;
+            }
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
             setStatus('error');
-            reject(err);
+            reject(err instanceof Error ? err : new Error(message));
           });
       });
     },
-    [reset, result],
+    [reset],
   );
 
   return {

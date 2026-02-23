@@ -11,3 +11,4 @@ dist/
 coverage/
 *.log
 web/.vite/
+.tmp/

@@ -8,6 +8,9 @@ type Props = {
   onConfigChange: (next: GenerateConfig) => void;
   onGenerate: () => void;
   onExport: () => void;
+  stagedJsonPath: string;
+  onStagedJsonPathChange: (next: string) => void;
+  onLoadStagedJson: () => void;
   loading: boolean;
   layers: {
     terrain: boolean;
@@ -57,6 +60,9 @@ export function Controls({
   onConfigChange,
   onGenerate,
   onExport,
+  stagedJsonPath,
+  onStagedJsonPathChange,
+  onLoadStagedJson,
   loading,
   layers,
   onLayerToggle,
@@ -271,6 +277,21 @@ export function Controls({
           {loading ? 'Generating...' : 'Generate'}
         </button>
         <button onClick={onExport}>Export JSON</button>
+      </div>
+
+      <div className="section">
+        <label>Load staged JSON (backend file path)</label>
+        <input
+          type="text"
+          value={stagedJsonPath}
+          placeholder="/absolute/path/to/citygen-staged.json"
+          onChange={(e) => onStagedJsonPathChange(e.target.value)}
+        />
+        <div className="button-row single-row">
+          <button onClick={onLoadStagedJson} disabled={loading || !stagedJsonPath.trim()}>
+            Load JSON (No Regenerate)
+          </button>
+        </div>
       </div>
 
       <div className="hint">Pan: drag canvas. Zoom: wheel. Click hub for attributes.</div>

@@ -8,6 +8,7 @@ import {
   generateCity,
   generateCityStaged,
   generateCityV2,
+  loadStagedJson,
   startGenerateCityV2Async,
 } from './api/client';
 import { useStreamingGeneration, type IncrementalState } from './hooks/useStreamingGeneration';
@@ -79,7 +80,7 @@ const defaultConfig: GenerateConfig = {
 const TIMELINE_TOTAL_MS = 20_000;
 const USE_THREE_TERRAIN = true;
 
-type StageSource = 'none' | 'v2' | 'staged' | 'fallback';
+type StageSource = 'none' | 'v2' | 'staged' | 'fallback' | 'json';
 
 type LayerState = LayerToggles;
 type GenerationProgress = {
@@ -90,6 +91,41 @@ type GenerationProgress = {
   message: string;
   logs: GenerateJobLog[];
   updatedAt?: string;
+};
+
+type BackendStepDescriptor = {
+  id: string;
+  title: string;
+  titleZh: string;
+  anchor: number;
+};
+
+type BackendStepState = BackendStepDescriptor & {
+  status: 'pending' | 'active' | 'done';
+  localProgress: number;
+};
+
+const BACKEND_PROGRESS_STEPS: BackendStepDescriptor[] = [
+  { id: 'start', title: 'Start', titleZh: '启动', anchor: 0.0 },
+  { id: 'terrain', title: 'Terrain', titleZh: '地形', anchor: 0.02 },
+  { id: 'rivers', title: 'Rivers', titleZh: '河流', anchor: 0.16 },
+  { id: 'hubs', title: 'Hubs', titleZh: '中心点', anchor: 0.28 },
+  { id: 'roads', title: 'Roads', titleZh: '道路', anchor: 0.36 },
+  { id: 'artifact', title: 'Artifact', titleZh: '骨架封装', anchor: 0.68 },
+  { id: 'analysis', title: 'Analysis', titleZh: '分析', anchor: 0.72 },
+  { id: 'buildings', title: 'Buildings', titleZh: '建筑预览', anchor: 0.80 },
+  { id: 'parcels', title: 'Parcels', titleZh: '地块/宗地', anchor: 0.90 },
+  { id: 'stages', title: 'Stages', titleZh: '阶段组装', anchor: 0.96 },
+  { id: 'done', title: 'Done', titleZh: '完成', anchor: 1.0 },
+];
+
+const BACKEND_PHASE_ALIASES: Record<string, string> = {
+  connecting: 'start',
+  queued: 'start',
+  running: 'start',
+  completed: 'done',
+  complete: 'done',
+  failed: 'done',
 };
 
 // Default zoom multiplier for initial view - shows only part of the scene like a game
@@ -178,6 +214,62 @@ function fitViewportToArtifact(
   return { panX, panY, scale };
 }
 
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+function canonicalBackendPhase(phase: string): string {
+  const normalized = (phase || '').trim().toLowerCase();
+  return BACKEND_PHASE_ALIASES[normalized] ?? normalized;
+}
+
+function buildBackendStepStates(progress: GenerationProgress | null): BackendStepState[] {
+  if (!progress) {
+    return BACKEND_PROGRESS_STEPS.map((step, idx) => ({
+      ...step,
+      status: idx === 0 ? 'active' : 'pending',
+      localProgress: idx === 0 ? 0.02 : 0,
+    }));
+  }
+
+  const globalProgress = clamp01(progress.progress || 0);
+  const phaseId = canonicalBackendPhase(progress.phase || progress.status || '');
+  const phaseIndex = BACKEND_PROGRESS_STEPS.findIndex((step) => step.id === phaseId);
+  const inferredIndex =
+    phaseIndex >= 0
+      ? phaseIndex
+      : BACKEND_PROGRESS_STEPS.reduce((acc, step, idx) => (globalProgress >= step.anchor ? idx : acc), 0);
+  const currentIdx = Math.max(0, inferredIndex);
+
+  return BACKEND_PROGRESS_STEPS.map((step, idx) => {
+    const nextAnchor = BACKEND_PROGRESS_STEPS[idx + 1]?.anchor ?? 1.0;
+    let localProgress = 0;
+    if (idx < currentIdx) {
+      localProgress = 1;
+    } else if (idx === currentIdx) {
+      if (nextAnchor <= step.anchor) {
+        localProgress = globalProgress >= step.anchor ? 1 : 0;
+      } else {
+        localProgress = clamp01((globalProgress - step.anchor) / (nextAnchor - step.anchor));
+      }
+      if (globalProgress > step.anchor || progress.status === 'streaming' || progress.status === 'running') {
+        localProgress = Math.max(localProgress, 0.06);
+      }
+    }
+
+    const done =
+      idx < currentIdx ||
+      (idx === currentIdx &&
+        ((progress.status === 'completed' && globalProgress >= 0.999) || (phaseId === 'done' && globalProgress >= step.anchor)));
+    const status: BackendStepState['status'] = done ? 'done' : idx === currentIdx ? 'active' : 'pending';
+    return {
+      ...step,
+      status,
+      localProgress: status === 'done' ? 1 : localProgress,
+    };
+  });
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -189,6 +281,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
+  const [stagedJsonPath, setStagedJsonPath] = useState('');
   const [health, setHealth] = useState<string>('checking');
   const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ panX: 0, panY: 0, scale: 1 });
@@ -215,6 +308,7 @@ export default function App() {
   });
   const [terrainBitmap, setTerrainBitmap] = useState<ImageBitmap | null>(null);
   const generateRunRef = useRef(0);
+  const autoGenerateTriggeredRef = useRef(false);
 
   // Streaming generation hook
   const streaming = useStreamingGeneration();
@@ -246,6 +340,7 @@ export default function App() {
   const timeline = useTimelinePlayer(stages, TIMELINE_TOTAL_MS);
   const currentStage = stages[timeline.currentStageIndex] ?? null;
   const stageShowsTerrain = !currentStage || currentStage.visible_layers.includes('terrain');
+  const backendStepStates = useMemo(() => buildBackendStepStates(generationProgress), [generationProgress]);
 
   const selectedHub = useMemo<HubRecord | null>(() => {
     if (!artifact || !selectedHubId) return null;
@@ -600,6 +695,7 @@ export default function App() {
       }
       timeline.reset(true);
     } catch (e) {
+      if (generateRunRef.current !== runId) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (generateRunRef.current === runId) {
@@ -607,7 +703,7 @@ export default function App() {
           prev
             ? {
                 ...prev,
-                status: prev.status === 'failed' ? prev.status : 'idle',
+                status: prev.status === 'failed' || prev.status === 'completed' ? prev.status : 'idle',
                 progress: prev.progress >= 1 ? prev.progress : prev.progress,
               }
             : prev,
@@ -617,7 +713,67 @@ export default function App() {
     }
   };
 
+  const onLoadStagedJson = async () => {
+    const path = stagedJsonPath.trim();
+    if (!path) return;
+
+    const runId = generateRunRef.current + 1;
+    generateRunRef.current = runId;
+
+    setLoading(true);
+    setError(null);
+    setSelectedHubId(null);
+    streaming.reset();
+    setGenerationProgress({
+      jobId: 'json-load',
+      status: 'running',
+      progress: 0.05,
+      phase: 'load_json',
+      message: 'Loading staged JSON from backend file...',
+      logs: [],
+    });
+
+    try {
+      const loaded = await loadStagedJson(path);
+      if (generateRunRef.current !== runId) return;
+
+      setResponse(loaded);
+      setSource('json');
+      setGenerationProgress({
+        jobId: 'json-load',
+        status: 'completed',
+        progress: 1,
+        phase: 'done',
+        message: 'Loaded staged JSON. Replaying growth stages from file.',
+        logs: [],
+      });
+
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      if (rect) {
+        setViewport(fitViewportToArtifact(loaded.final_artifact, rect.width, rect.height));
+      } else {
+        setViewport({ panX: 0, panY: 0, scale: 1 });
+      }
+      timeline.reset(true);
+    } catch (e) {
+      if (generateRunRef.current !== runId) return;
+      setGenerationProgress({
+        jobId: 'json-load',
+        status: 'failed',
+        progress: 0,
+        phase: 'failed',
+        message: 'Failed to load staged JSON',
+        logs: [],
+      });
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (generateRunRef.current === runId) setLoading(false);
+    }
+  };
+
   useEffect(() => {
+    if (autoGenerateTriggeredRef.current) return;
+    autoGenerateTriggeredRef.current = true;
     void onGenerate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -729,6 +885,9 @@ export default function App() {
         onConfigChange={setConfig}
         onGenerate={onGenerate}
         onExport={onExport}
+        stagedJsonPath={stagedJsonPath}
+        onStagedJsonPathChange={setStagedJsonPath}
+        onLoadStagedJson={onLoadStagedJson}
         loading={loading}
         layers={layers}
         onLayerToggle={onLayerToggle}
@@ -756,8 +915,25 @@ export default function App() {
               </span>
               <span className="progress-percent">{Math.round((generationProgress.progress || 0) * 100)}%</span>
             </div>
-            <div className="progress-bar-track" aria-label="generation progress">
-              <div className="progress-bar-fill" style={{ width: `${Math.round((generationProgress.progress || 0) * 100)}%` }} />
+            <div className="backend-step-strip" aria-label="backend step progress">
+              {backendStepStates.map((step) => (
+                <div
+                  key={step.id}
+                  className={`backend-step-item is-${step.status}`}
+                  title={`${step.titleZh} / ${step.title}`}
+                >
+                  <div className="backend-step-bead-row" aria-hidden="true">
+                    <span className="backend-step-bead" />
+                    <span className="backend-step-mini-track">
+                      <span className="backend-step-mini-fill" style={{ width: `${Math.round(step.localProgress * 100)}%` }} />
+                    </span>
+                  </div>
+                  <div className="backend-step-labels">
+                    <span className="backend-step-label-zh">{step.titleZh}</span>
+                    <span className="backend-step-label-en">{step.title}</span>
+                  </div>
+                </div>
+              ))}
             </div>
             <div className="progress-message">
               <code>{generationProgress.phase || 'waiting'}</code>

@@ -73,3 +73,12 @@ export async function fetchGenerateJobResult(jobId: string): Promise<StagedCityR
   const res = await fetch(`${API_BASE}/api/v2/jobs/${jobId}/result`);
   return parseJson(res);
 }
+
+export async function loadStagedJson(path: string): Promise<StagedCityResponse> {
+  const res = await fetch(`${API_BASE}/api/v2/load_staged_json`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  return parseJson(res);
+}

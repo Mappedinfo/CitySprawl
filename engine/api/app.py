@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
@@ -12,6 +13,7 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi import HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from engine.generator import generate_city, generate_city_staged
@@ -26,6 +28,10 @@ _JOBS: Dict[str, Dict[str, Any]] = {}
 StreamCallback = Callable[[Dict[str, Any]], None]
 
 
+class LoadStagedJsonRequest(BaseModel):
+    path: str = Field(min_length=1)
+
+
 class StreamBuffer:
     """Buffer for batching stream events to reduce network overhead."""
 
@@ -36,19 +42,23 @@ class StreamBuffer:
         self.max_batch_size = max_batch_size
         self.sequence = 0
         self._lock = threading.Lock()
+        self._urgent_flush = False
 
-    def add(self, event: Dict[str, Any]) -> None:
+    def add(self, event: Dict[str, Any], *, urgent: bool = False) -> None:
         with self._lock:
             self.sequence += 1
             event["sequence"] = self.sequence
             event["timestamp_ms"] = int(time.time() * 1000)
             self.buffer.append(event)
+            self._urgent_flush = self._urgent_flush or bool(urgent)
 
     def should_flush(self) -> bool:
         with self._lock:
             if not self.buffer:
                 return False
             return (
+                self._urgent_flush
+                or
                 len(self.buffer) >= self.max_batch_size
                 or (time.time() - self.last_flush) * 1000 >= self.flush_interval_ms
             )
@@ -60,6 +70,7 @@ class StreamBuffer:
             events = self.buffer
             self.buffer = []
             self.last_flush = time.time()
+            self._urgent_flush = False
             return {"event": "batch", "data": json.dumps({"events": events})}
 
     def get_pending_count(self) -> int:
@@ -163,6 +174,31 @@ def _create_generate_job(payload: GenerateConfig) -> str:
     thread = threading.Thread(target=_run_generate_job, args=(job_id, payload), daemon=True, name=f"citygen-{job_id}")
     thread.start()
     return job_id
+
+
+def _validate_staged_response_payload(payload: Any) -> StagedCityResponse:
+    if hasattr(StagedCityResponse, "model_validate"):
+        return StagedCityResponse.model_validate(payload)  # type: ignore[attr-defined]
+    return StagedCityResponse.parse_obj(payload)  # type: ignore[attr-defined]
+
+
+def _load_staged_json(path_str: str) -> StagedCityResponse:
+    path = Path(path_str).expanduser()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="json_file_not_found")
+    if not path.is_file():
+        raise HTTPException(status_code=400, detail="json_path_must_be_file")
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json:{exc.msg}") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"io_error:{exc}") from exc
+    try:
+        return _validate_staged_response_payload(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_staged_city_json:{exc}") from exc
 
 
 def _default_preset() -> GenerateConfig:
@@ -412,6 +448,10 @@ def create_app() -> FastAPI:
         job_id = _create_generate_job(payload)
         return {"job_id": job_id, "status": "queued"}
 
+    @app.post("/api/v2/load_staged_json", response_model=StagedCityResponse)
+    def load_staged_json(payload: LoadStagedJsonRequest) -> StagedCityResponse:
+        return _load_staged_json(payload.path)
+
     @app.get("/api/v2/jobs/{job_id}")
     def get_generate_job(job_id: str, since_seq: int = Query(default=0, ge=0)) -> Dict[str, Any]:
         with _JOBS_LOCK:
@@ -439,7 +479,7 @@ def create_app() -> FastAPI:
         """Stream city generation progress with incremental geometry data via SSE."""
 
         async def event_generator():
-            buffer = StreamBuffer(flush_interval_ms=80.0, max_batch_size=15)
+            buffer = StreamBuffer(flush_interval_ms=30.0, max_batch_size=8)
             result_holder: Dict[str, Any] = {"result": None, "error": None, "done": False}
             heartbeat_counter = 0
 
@@ -454,7 +494,7 @@ def create_app() -> FastAPI:
                 buffer.add({
                     "event_type": "progress",
                     "data": {"phase": phase, "progress": progress, "message": message},
-                })
+                }, urgent=True)
 
             def run_generation() -> None:
                 _LOGGER.info("Generation thread started")
@@ -489,12 +529,12 @@ def create_app() -> FastAPI:
                             _LOGGER.debug("Yielding batch with events")
                             yield batch
                     else:
-                        # Send heartbeat every ~2 seconds (40 iterations * 50ms)
+                        # Send heartbeat every ~2 seconds.
                         heartbeat_counter += 1
-                        if heartbeat_counter >= 40:
+                        if heartbeat_counter >= 100:
                             heartbeat_counter = 0
                             yield {"event": "heartbeat", "data": json.dumps({"status": "generating", "seq": buffer.sequence})}
-                    await asyncio.sleep(0.05)  # 50ms poll interval
+                    await asyncio.sleep(0.02)
 
                 # Flush any remaining events
                 final_batch = buffer.flush()
@@ -510,9 +550,9 @@ def create_app() -> FastAPI:
                         "data": json.dumps({"error": result_holder["error"]}),
                     }
                 elif result_holder["result"]:
-                    # Send final result - include final_artifact flag for frontend detection
+                    # Send final result as the actual staged payload (do not clobber final_artifact).
                     result_data = model_dump(result_holder["result"])
-                    result_data["final_artifact"] = True  # Signal completion to frontend
+                    result_data["stream_complete"] = True
                     _LOGGER.info("Sending complete event with result")
                     yield {
                         "event": "complete",

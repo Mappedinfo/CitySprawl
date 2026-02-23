@@ -1,5 +1,8 @@
-from fastapi.testclient import TestClient
+import json
 import time
+from pathlib import Path
+
+from fastapi.testclient import TestClient
 
 from engine.api.app import app
 
@@ -210,3 +213,58 @@ def test_generate_v2_async_progress_and_result():
     result_body = result_res.json()
     assert "final_artifact" in result_body
     assert "stages" in result_body
+
+
+def test_generate_stream_complete_event_keeps_final_artifact_object():
+    payload = {
+        "seed": 21,
+        "grid_resolution": 64,
+        "terrain": {"noise_octaves": 4, "relief_strength": 1.0},
+        "hydrology": {"enable": True, "accum_threshold": 0.02, "min_river_length_m": 80.0},
+        "hubs": {"t1_count": 1, "t2_count": 1, "t3_count": 4, "min_distance_m": 80.0},
+        "roads": {"k_neighbors": 4, "loop_budget": 1, "branch_steps": 1, "slope_penalty": 2.0, "river_cross_penalty": 200.0},
+        "naming": {"provider": "mock"},
+    }
+    res = client.post("/api/v2/generate_stream", json=payload, headers={"accept": "text/event-stream"})
+    assert res.status_code == 200
+    text = res.text
+    assert "event: complete" in text
+
+    lines = [line.strip() for line in text.splitlines()]
+    complete_data = None
+    saw_complete = False
+    for line in lines:
+        if line == "event: complete":
+            saw_complete = True
+            continue
+        if saw_complete and line.startswith("data:"):
+            complete_data = json.loads(line[len("data:"):].strip())
+            break
+    assert complete_data is not None
+    assert isinstance(complete_data.get("final_artifact"), dict)
+    assert "stages" in complete_data
+    assert complete_data.get("stream_complete") is True
+
+
+def test_load_staged_json_roundtrip(tmp_path: Path):
+    payload = {
+        "seed": 22,
+        "grid_resolution": 64,
+        "terrain": {"noise_octaves": 4, "relief_strength": 1.0},
+        "hydrology": {"enable": True, "accum_threshold": 0.02, "min_river_length_m": 80.0},
+        "hubs": {"t1_count": 1, "t2_count": 1, "t3_count": 4, "min_distance_m": 80.0},
+        "roads": {"k_neighbors": 4, "loop_budget": 1, "branch_steps": 1, "slope_penalty": 2.0, "river_cross_penalty": 200.0},
+        "naming": {"provider": "mock"},
+    }
+    generated = client.post("/api/v2/generate", json=payload)
+    assert generated.status_code == 200
+    data = generated.json()
+
+    json_path = tmp_path / "staged_city.json"
+    json_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = client.post("/api/v2/load_staged_json", json={"path": str(json_path)})
+    assert loaded.status_code == 200
+    loaded_body = loaded.json()
+    assert loaded_body["final_artifact"]["meta"]["seed"] == 22
+    assert [s["stage_id"] for s in loaded_body["stages"]] == [s["stage_id"] for s in data["stages"]]
