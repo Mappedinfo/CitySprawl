@@ -59,6 +59,7 @@ from engine.traffic import assign_edge_flows
 
 SCHEMA_VERSION = "0.1.0"
 ProgressCallback = Callable[[str, float, str], None]
+StreamCallback = Callable[[Dict[str, Any]], None]
 
 
 @dataclass
@@ -277,7 +278,12 @@ def _build_adaptive_rivers(config: GenerateConfig, terrain_bundle: Any) -> Tuple
     return selected_rivers_raw, river_areas, coverage, river_area_m2, main_len, clipped_ratio
 
 
-def _generate_core_context(config: GenerateConfig, *, progress_cb: ProgressCallback | None = None) -> _CoreGenerationContext:
+def _generate_core_context(
+    config: GenerateConfig,
+    *,
+    progress_cb: ProgressCallback | None = None,
+    stream_cb: StreamCallback | None = None,
+) -> _CoreGenerationContext:
     _emit_progress(progress_cb, "terrain", 0.02, "Generating terrain and base hydrology")
     terrain_bundle = generate_terrain_bundle(
         resolution=config.grid_resolution,
@@ -288,6 +294,7 @@ def _generate_core_context(config: GenerateConfig, *, progress_cb: ProgressCallb
         hydrology_enabled=config.hydrology.enable,
         accum_threshold=config.hydrology.accum_threshold,
         min_river_length_m=config.hydrology.min_river_length_m,
+        stream_cb=stream_cb,
     )
     _emit_progress(progress_cb, "rivers", 0.16, "Selecting and shaping river geometry")
 
@@ -295,6 +302,29 @@ def _generate_core_context(config: GenerateConfig, *, progress_cb: ProgressCallb
         config,
         terrain_bundle,
     )
+    # Emit river centerline events for real-time visualization
+    if stream_cb and selected_rivers_raw:
+        for river in selected_rivers_raw:
+            try:
+                pts = river.get("points", [])
+                centerline = []
+                for p in pts[:200]:
+                    if isinstance(p, tuple) or isinstance(p, list):
+                        centerline.append({"x": float(p[0]), "y": float(p[1])})
+                    elif isinstance(p, dict):
+                        centerline.append({"x": float(p["x"]), "y": float(p["y"])})
+                    else:
+                        centerline.append({"x": float(p.x), "y": float(p.y)})
+                stream_cb({
+                    "event_type": "river_progress",
+                    "data": {
+                        "river_id": str(river.get("id", "")),
+                        "centerline": centerline,
+                        "flow": float(river.get("flow", 0)),
+                    },
+                })
+            except Exception:
+                pass
     _emit_progress(progress_cb, "hubs", 0.28, "Sampling hub centers")
 
     hub_result = generate_hubs(
@@ -307,6 +337,16 @@ def _generate_core_context(config: GenerateConfig, *, progress_cb: ProgressCallb
         t3_count=config.hubs.t3_count,
         min_distance_m=config.hubs.min_distance_m,
     )
+    # Emit hub placement events for real-time visualization
+    if stream_cb and hub_result:
+        for hub in hub_result.hubs:
+            try:
+                stream_cb({
+                    "event_type": "road_node_added",
+                    "data": {"id": hub.id, "x": float(hub.pos.x), "y": float(hub.pos.y), "kind": f"hub_t{hub.tier}"},
+                })
+            except Exception:
+                pass
     _emit_progress(progress_cb, "roads", 0.36, "Generating road network")
 
     roads_cfg = config.roads
@@ -415,6 +455,7 @@ def _generate_core_context(config: GenerateConfig, *, progress_cb: ProgressCallb
         syntax_prune_quantile=roads_cfg.syntax_prune_quantile,
         river_areas=river_areas,
         progress_cb=_progress_subrange(progress_cb, 0.36, 0.78),
+        stream_cb=stream_cb,
     )
     _emit_progress(progress_cb, "terrain_visuals", 0.82, "Preparing terrain previews and contours")
     terrain_visuals = compute_terrain_classification(
@@ -840,10 +881,19 @@ def generate_city(config: GenerateConfig, *, progress_cb: ProgressCallback | Non
     return artifact
 
 
-def generate_city_staged(config: GenerateConfig, *, progress_cb: ProgressCallback | None = None) -> StagedCityResponse:
+def generate_city_staged(
+    config: GenerateConfig,
+    *,
+    progress_cb: ProgressCallback | None = None,
+    stream_cb: StreamCallback | None = None,
+) -> StagedCityResponse:
     t0 = perf_counter()
     _emit_progress(progress_cb, "start", 0.0, "Starting staged city generation")
-    ctx = _generate_core_context(config, progress_cb=_progress_subrange(progress_cb, 0.02, 0.62))
+    ctx = _generate_core_context(
+        config,
+        progress_cb=_progress_subrange(progress_cb, 0.02, 0.62),
+        stream_cb=stream_cb,
+    )
     _emit_progress(progress_cb, "artifact", 0.68, "Building base artifact")
     final_artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
     layers = _build_analysis_and_land_layers(config, ctx, final_artifact, progress_cb=_progress_subrange(progress_cb, 0.70, 0.93))

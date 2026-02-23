@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
@@ -114,9 +114,20 @@ def generate_terrain_bundle(
     hydrology_enabled: bool,
     accum_threshold: float,
     min_river_length_m: float,
+    stream_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> TerrainBundle:
     height = generate_heightmap(resolution, octaves, seed, relief_strength)
+    if stream_cb:
+        try:
+            stream_cb({"event_type": "terrain_milestone", "data": {"stage": "heightmap", "resolution": resolution, "extent_m": extent_m}})
+        except Exception:
+            pass
     slope = compute_slope(height, extent_m)
+    if stream_cb:
+        try:
+            stream_cb({"event_type": "terrain_milestone", "data": {"stage": "slope"}})
+        except Exception:
+            pass
     hydrology = compute_hydrology(
         height=height,
         extent_m=extent_m,
@@ -124,6 +135,11 @@ def generate_terrain_bundle(
         accum_threshold=accum_threshold,
         min_river_length_m=min_river_length_m,
     )
+    if stream_cb:
+        try:
+            stream_cb({"event_type": "terrain_milestone", "data": {"stage": "hydrology"}})
+        except Exception:
+            pass
     return TerrainBundle(
         height=height,
         slope=slope,

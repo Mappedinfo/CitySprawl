@@ -3,12 +3,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import heapq
 from math import hypot
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from engine.core.geometry import Segment, Vec2, point_segment_distance, project_point_to_segment, segment_intersection
 from engine.roads.terrain_probe import TerrainProbe, TerrainProbeConfig
+
+
+StreamCallback = Callable[[Dict[str, Any]], None]
+
+
+def _emit_stream_event(stream_cb: Optional[StreamCallback], event: Dict[str, Any]) -> None:
+    """Emit a streaming event if callback is provided."""
+    if stream_cb is None:
+        return
+    try:
+        stream_cb(event)
+    except Exception:
+        return
 
 
 @dataclass
@@ -398,6 +411,7 @@ class ClassicRoadGenerator:
         blocks: Optional[Sequence[object]],
         cfg: ClassicCollectorConfig,
         seed: int,
+        stream_cb: Optional[StreamCallback] = None,
     ) -> None:
         self.extent_m = float(extent_m)
         self.probe = probe
@@ -408,6 +422,7 @@ class ClassicRoadGenerator:
         self.cfg = cfg
         self.rng = np.random.default_rng(int(seed) + 8407)
         self.forbidden_geom = _build_forbidden_geom(getattr(probe, "river_union", None), float(cfg.river_setback_m))
+        self.stream_cb = stream_cb
 
         self.base_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "collector", "local"})
         self.arterial_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial"})
@@ -805,6 +820,17 @@ class ClassicRoadGenerator:
                 continue
             traces.append(tr.points)
             cul_flags.append(bool(tr.culdesac))
+            # Stream the completed trace
+            _emit_stream_event(self.stream_cb, {
+                "event_type": "road_trace_progress",
+                "data": {
+                    "trace_id": f"trace-{self.trace_count}",
+                    "points": [{"x": p.x, "y": p.y} for p in tr.points],
+                    "complete": True,
+                    "road_class": "collector",
+                    "culdesac": tr.culdesac,
+                },
+            })
             if tr.culdesac:
                 self.culdesac_count += 1
             if str(tr.seed_kind).startswith("riverfront_"):
@@ -852,6 +878,7 @@ def generate_classic_collectors(
     blocks: Optional[Sequence[object]],
     cfg: ClassicCollectorConfig,
     seed: int,
+    stream_cb: Optional[StreamCallback] = None,
 ) -> tuple[list[list[Vec2]], list[bool], list[str], dict[str, float]]:
     probe = TerrainProbe(
         extent_m=float(extent_m),
@@ -880,5 +907,6 @@ def generate_classic_collectors(
         blocks=blocks,
         cfg=cfg,
         seed=int(seed),
+        stream_cb=stream_cb,
     )
     return gen.grow()

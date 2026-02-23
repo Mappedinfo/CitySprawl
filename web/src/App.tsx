@@ -10,7 +10,8 @@ import {
   generateCityV2,
   startGenerateCityV2Async,
 } from './api/client';
-import { drawStageScene, type LayerToggles } from './render/stageRenderer';
+import { useStreamingGeneration, type IncrementalState } from './hooks/useStreamingGeneration';
+import { drawStageScene, drawStreamingTraces, type LayerToggles } from './render/stageRenderer';
 import { heightGridToImageData } from './render/terrainImage';
 import { clampScale, screenToWorld, worldToScreen, type Viewport } from './render/viewport';
 import { TerrainScene } from './render3d/TerrainScene';
@@ -215,6 +216,30 @@ export default function App() {
   const [terrainBitmap, setTerrainBitmap] = useState<ImageBitmap | null>(null);
   const generateRunRef = useRef(0);
 
+  // Streaming generation hook
+  const streaming = useStreamingGeneration();
+  const isStreaming = streaming.status === 'streaming' || streaming.status === 'connecting';
+  // Ref to avoid restarting the animation loop on every streaming state change
+  const streamingStateRef = useRef(streaming.state);
+  streamingStateRef.current = streaming.state;
+
+  // Sync streaming progress to generationProgress UI
+  useEffect(() => {
+    if (!isStreaming) return;
+    const { phase, progress, message } = streaming.progress;
+    if (!phase && progress === 0) return; // no progress yet
+    setGenerationProgress((prev) => {
+      if (!prev || prev.jobId !== 'streaming') return prev;
+      return {
+        ...prev,
+        progress,
+        phase,
+        message,
+        status: 'streaming',
+      };
+    });
+  }, [isStreaming, streaming.progress]);
+
   const artifact: CityArtifact | null = response?.final_artifact ?? null;
   const stages: StageArtifact[] = response?.stages ?? [];
 
@@ -338,13 +363,87 @@ export default function App() {
         cssWidth: rect.width,
         cssHeight: rect.height,
       });
+
+      // Draw streaming traces overlay if streaming is active
+      if (isStreaming && (streaming.state.partialTraces.size > 0 || streaming.state.completedTraces.length > 0 || streaming.state.nodes.size > 0 || streaming.state.rivers.length > 0)) {
+        const extent = artifact?.terrain.extent_m ?? config.extent_m;
+        drawStreamingTraces(
+          ctx,
+          streaming.state,
+          extent,
+          viewport,
+          rect.width,
+          rect.height,
+          Date.now(),
+        );
+      }
     };
 
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(wrapper);
     return () => ro.disconnect();
-  }, [artifact, currentStage, viewport, terrainBitmap, layers, timeline.currentTimeMs, reducedMotion]);
+  }, [artifact, currentStage, viewport, terrainBitmap, layers, timeline.currentTimeMs, reducedMotion, isStreaming, streaming.state, config.extent_m]);
+
+  // Animation loop for streaming visualization
+  useEffect(() => {
+    if (!isStreaming) return;
+
+    let animationId: number;
+    const animate = () => {
+      const canvas = canvasRef.current;
+      const wrapper = wrapperRef.current;
+      if (!canvas || !wrapper) {
+        animationId = requestAnimationFrame(animate);
+        return;
+      }
+
+      const rect = wrapper.getBoundingClientRect();
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        animationId = requestAnimationFrame(animate);
+        return;
+      }
+
+      const dpr = window.devicePixelRatio || 1;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // Redraw base scene
+      drawStageScene({
+        ctx,
+        artifact,
+        stage: currentStage,
+        viewport,
+        terrainBitmap,
+        layers: USE_THREE_TERRAIN ? { ...layers, terrain: false } : layers,
+        nowMs: Date.now(),
+        reducedMotion,
+        transparentBackground: USE_THREE_TERRAIN,
+        cssWidth: rect.width,
+        cssHeight: rect.height,
+      });
+
+      // Draw streaming traces overlay (read from ref to avoid dep-array thrashing)
+      const sState = streamingStateRef.current;
+      if (sState.partialTraces.size > 0 || sState.completedTraces.length > 0 || sState.nodes.size > 0 || sState.rivers.length > 0) {
+        const extent = artifact?.terrain.extent_m ?? config.extent_m;
+        drawStreamingTraces(
+          ctx,
+          sState,
+          extent,
+          viewport,
+          rect.width,
+          rect.height,
+          Date.now(),
+        );
+      }
+
+      animationId = requestAnimationFrame(animate);
+    };
+
+    animationId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animationId);
+  }, [isStreaming, artifact, currentStage, viewport, terrainBitmap, layers, reducedMotion, config.extent_m]);
 
   const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -390,9 +489,41 @@ export default function App() {
     setError(null);
     setSelectedHubId(null);
     setGenerationProgress(null);
+    streaming.reset();
     try {
       let nextResponse: StagedCityResponse | null = null;
+
+      // Try streaming generation first
       try {
+        setGenerationProgress({
+          jobId: 'streaming',
+          status: 'streaming',
+          progress: 0,
+          phase: 'connecting',
+          message: 'Starting real-time streaming generation...',
+          logs: [],
+        });
+
+        const streamResult = await streaming.start(config);
+        if (streamResult && generateRunRef.current === runId) {
+          nextResponse = streamResult;
+          setResponse(streamResult);
+          setSource('v2');
+          setGenerationProgress({
+            jobId: 'streaming',
+            status: 'completed',
+            progress: 1,
+            phase: 'done',
+            message: 'Streaming generation complete',
+            logs: [],
+          });
+        }
+      } catch (streamErr) {
+        // Streaming failed, fall back to async polling
+        if (generateRunRef.current !== runId) throw streamErr;
+        console.warn('Streaming generation unavailable, falling back to async polling:', streamErr);
+        streaming.reset();
+
         try {
           const asyncStart = await startGenerateCityV2Async(config);
           setGenerationProgress({
@@ -429,34 +560,38 @@ export default function App() {
                 }
               : null,
           );
-          const v2 = await generateCityV2(config);
-          nextResponse = v2;
-          setResponse(v2);
-          setSource('v2');
-        }
-      } catch (v2Err) {
-        try {
-          const staged = await generateCityStaged(config);
-          staged.final_artifact.metrics.degraded_mode = true;
-          nextResponse = staged;
-          setResponse(staged);
-          setSource('staged');
-          setError(`V2 API unavailable. Using v1 staged endpoint. ${v2Err instanceof Error ? v2Err.message : ''}`.trim());
-        } catch (stagedErr) {
-          const legacyArtifact = await generateCity(config);
-          legacyArtifact.metrics.degraded_mode = true;
-          const fallback = composeFallbackStagedResponse(legacyArtifact);
-          fallback.final_artifact.metrics.degraded_mode = true;
-          nextResponse = fallback;
-          setResponse(fallback);
-          setSource('fallback');
-          setError(
-            `V2 + staged API unavailable. Using legacy fallback timeline. ${
-              stagedErr instanceof Error ? stagedErr.message : ''
-            }`.trim(),
-          );
+
+          try {
+            const v2 = await generateCityV2(config);
+            nextResponse = v2;
+            setResponse(v2);
+            setSource('v2');
+          } catch (v2Err) {
+            try {
+              const staged = await generateCityStaged(config);
+              staged.final_artifact.metrics.degraded_mode = true;
+              nextResponse = staged;
+              setResponse(staged);
+              setSource('staged');
+              setError(`V2 API unavailable. Using v1 staged endpoint. ${v2Err instanceof Error ? v2Err.message : ''}`.trim());
+            } catch (stagedErr) {
+              const legacyArtifact = await generateCity(config);
+              legacyArtifact.metrics.degraded_mode = true;
+              const fallback = composeFallbackStagedResponse(legacyArtifact);
+              fallback.final_artifact.metrics.degraded_mode = true;
+              nextResponse = fallback;
+              setResponse(fallback);
+              setSource('fallback');
+              setError(
+                `V2 + staged API unavailable. Using legacy fallback timeline. ${
+                  stagedErr instanceof Error ? stagedErr.message : ''
+                }`.trim(),
+              );
+            }
+          }
         }
       }
+
       const rect = wrapperRef.current?.getBoundingClientRect();
       if (nextResponse?.final_artifact && rect) {
         setViewport(fitViewportToArtifact(nextResponse.final_artifact, rect.width, rect.height));

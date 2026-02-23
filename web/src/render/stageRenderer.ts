@@ -1,4 +1,4 @@
-import type { CityArtifact, LandBlock, ParcelLot, PedestrianPath, Polygon2D, ResourceSite, StageArtifact } from '../types/city';
+import type { CityArtifact, LandBlock, ParcelLot, PedestrianPath, Point2D, Polygon2D, ResourceSite, StageArtifact } from '../types/city';
 import { drawCity, type LayerFlags } from './cityRenderer';
 import { drawBuildingFootprints, drawGreenZones } from './finalPreview';
 import { drawTrafficFlows } from './trafficAnimation';
@@ -430,4 +430,153 @@ export function drawStageScene({
       drawTrafficFlows(ctx, artifact, stage.layers.traffic_edge_flows, viewport, nowMs, reducedMotion, cssWidth, cssHeight);
     }
   });
+}
+
+export type StreamingTraceData = {
+  partialTraces: Map<string, Point2D[]>;
+  completedTraces: Array<{
+    trace_id: string;
+    points: Point2D[];
+    road_class?: string;
+    culdesac?: boolean;
+  }>;
+  nodes?: Map<string, { id: string; x: number; y: number; kind: string }>;
+  edges?: Map<string, { id: string; u: string; v: string; road_class: string }>;
+  rivers?: Array<{ river_id: string; centerline: Point2D[]; flow: number }>;
+};
+
+export function drawStreamingTraces(
+  ctx: CanvasRenderingContext2D,
+  data: StreamingTraceData,
+  extent: number,
+  viewport: Viewport,
+  cssWidth: number,
+  cssHeight: number,
+  nowMs: number,
+): void {
+  ctx.save();
+
+  // Draw completed traces (solid lines)
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  for (const trace of data.completedTraces) {
+    if (trace.points.length < 2) continue;
+
+    // Color based on road class
+    if (trace.road_class === 'arterial') {
+      ctx.strokeStyle = 'rgba(255, 200, 120, 0.9)';
+      ctx.lineWidth = 3;
+    } else if (trace.road_class === 'collector') {
+      ctx.strokeStyle = 'rgba(200, 220, 255, 0.85)';
+      ctx.lineWidth = 2;
+    } else {
+      ctx.strokeStyle = 'rgba(180, 200, 230, 0.75)';
+      ctx.lineWidth = 1.5;
+    }
+
+    ctx.beginPath();
+    trace.points.forEach((p, i) => {
+      const s = worldToScreen(p.x, p.y, extent, cssWidth, cssHeight, viewport);
+      if (i === 0) ctx.moveTo(s.x, s.y);
+      else ctx.lineTo(s.x, s.y);
+    });
+    ctx.stroke();
+
+    // Draw culdesac indicator
+    if (trace.culdesac && trace.points.length > 0) {
+      const last = trace.points[trace.points.length - 1];
+      const s = worldToScreen(last.x, last.y, extent, cssWidth, cssHeight, viewport);
+      ctx.fillStyle = 'rgba(255, 180, 120, 0.8)';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Draw partial traces (growing, with animation)
+  ctx.strokeStyle = 'rgba(255, 220, 100, 0.95)';
+  ctx.lineWidth = 3;
+
+  for (const [traceId, points] of data.partialTraces) {
+    if (points.length < 2) continue;
+
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      const s = worldToScreen(p.x, p.y, extent, cssWidth, cssHeight, viewport);
+      if (i === 0) ctx.moveTo(s.x, s.y);
+      else ctx.lineTo(s.x, s.y);
+    });
+    ctx.stroke();
+
+    // Draw pulsing head at the last point
+    const last = points[points.length - 1];
+    const s = worldToScreen(last.x, last.y, extent, cssWidth, cssHeight, viewport);
+    const pulse = (nowMs % 800) / 800;
+    const radius = 4 + pulse * 8;
+    const alpha = 1 - pulse;
+
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255, 220, 100, ${alpha})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Solid center dot
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 240, 180, 1)';
+    ctx.fill();
+  }
+
+  // Draw incremental nodes (if available)
+  if (data.nodes && data.nodes.size > 0) {
+    ctx.fillStyle = 'rgba(255, 200, 100, 0.8)';
+    for (const [, node] of data.nodes) {
+      const s = worldToScreen(node.x, node.y, extent, cssWidth, cssHeight, viewport);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Draw incremental edges (if nodes are available for lookup)
+  if (data.edges && data.edges.size > 0 && data.nodes && data.nodes.size > 0) {
+    ctx.strokeStyle = 'rgba(200, 180, 255, 0.7)';
+    ctx.lineWidth = 1.5;
+    for (const [, edge] of data.edges) {
+      const uNode = data.nodes.get(edge.u);
+      const vNode = data.nodes.get(edge.v);
+      if (!uNode || !vNode) continue;
+
+      const s1 = worldToScreen(uNode.x, uNode.y, extent, cssWidth, cssHeight, viewport);
+      const s2 = worldToScreen(vNode.x, vNode.y, extent, cssWidth, cssHeight, viewport);
+      ctx.beginPath();
+      ctx.moveTo(s1.x, s1.y);
+      ctx.lineTo(s2.x, s2.y);
+      ctx.stroke();
+    }
+  }
+
+  // Draw river centerlines (if available)
+  if (data.rivers && data.rivers.length > 0) {
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const river of data.rivers) {
+      if (river.centerline.length < 2) continue;
+      const width = Math.max(1.5, Math.min(4, 0.75 + Math.log10(1 + river.flow) * 0.9));
+      ctx.strokeStyle = 'rgba(96, 224, 255, 0.8)';
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      river.centerline.forEach((p, i) => {
+        const s = worldToScreen(p.x, p.y, extent, cssWidth, cssHeight, viewport);
+        if (i === 0) ctx.moveTo(s.x, s.y);
+        else ctx.lineTo(s.x, s.y);
+      });
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 from math import atan2, cos, hypot, pi, sin
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 try:
@@ -48,6 +48,17 @@ class RoadBuildResult:
 
 
 RoadProgressCallback = Callable[[str, float, str], None]
+RoadStreamCallback = Callable[[Dict[str, Any]], None]
+
+
+def _emit_stream_event(stream_cb: RoadStreamCallback | None, event: Dict[str, Any]) -> None:
+    """Emit a streaming event if callback is provided."""
+    if stream_cb is None:
+        return
+    try:
+        stream_cb(event)
+    except Exception:
+        return
 
 
 def _emit_road_progress(progress_cb: RoadProgressCallback | None, phase: str, progress: float, message: str) -> None:
@@ -687,6 +698,7 @@ def _generate_branches(
     slope_penalty: float,
     river_cross_penalty: float,
     seed: int,
+    stream_cb: Optional[RoadStreamCallback] = None,
 ) -> None:
     if branch_steps <= 0:
         return
@@ -732,6 +744,11 @@ def _generate_branches(
             new_id = f"node-{next_node_idx}"
             next_node_idx += 1
             nodes.append(BuiltRoadNode(id=new_id, pos=next_pos, kind="branch", source_hub_id=hub.id))
+            # Stream the new node
+            _emit_stream_event(stream_cb, {
+                "event_type": "road_node_added",
+                "data": {"id": new_id, "x": next_pos.x, "y": next_pos.y, "kind": "branch"},
+            })
             edge = BuiltRoadEdge(
                 id=f"edge-{len(edges)}",
                 u=current_id,
@@ -744,6 +761,17 @@ def _generate_branches(
                 render_order=1,
             )
             edges.append(edge)
+            # Stream the new edge
+            _emit_stream_event(stream_cb, {
+                "event_type": "road_edge_added",
+                "data": {
+                    "id": edge.id,
+                    "u": edge.u,
+                    "v": edge.v,
+                    "road_class": edge.road_class,
+                    "length_m": edge.length_m,
+                },
+            })
             node_lookup[new_id] = nodes[-1]
             current_id = new_id
             current_pos = next_pos
@@ -1151,6 +1179,7 @@ def _generate_hierarchy_linework(
     tensor_arterial_influence_m: float,
     hubs: Optional[Sequence[HubPoint]] = None,
     river_areas: Optional[Sequence[object]] = None,
+    stream_cb: Optional[RoadStreamCallback] = None,
 ) -> tuple[list[str], dict[str, float]]:
     style = (road_style or "skeleton").lower()
     notes: list[str] = []
@@ -1244,6 +1273,7 @@ def _generate_hierarchy_linework(
                         river_setback_m=river_setback_m,
                     ),
                     seed=seed,
+                    stream_cb=stream_cb,
                 )
             except Exception:
                 collector_backend = "grid_clip"
@@ -1845,6 +1875,7 @@ def generate_roads(
     syntax_prune_quantile: float = 0.15,
     river_areas: Optional[Sequence[object]] = None,
     progress_cb: Optional[RoadProgressCallback] = None,
+    stream_cb: Optional[RoadStreamCallback] = None,
 ) -> RoadBuildResult:
     # Deprecated compatibility alias: keep accepting tensor-streamline config names while routing
     # collector generation through the classic turtle growth backend.
@@ -1906,6 +1937,7 @@ def generate_roads(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
         seed=seed,
+        stream_cb=stream_cb,
     )
     _emit_road_progress(progress_cb, "roads.branches", 0.24, "Generated branch roads")
 
@@ -2001,6 +2033,7 @@ def generate_roads(
         tensor_arterial_influence_m=tensor_arterial_influence_m,
         hubs=hubs,
         river_areas=river_areas,
+        stream_cb=stream_cb,
     )
     _emit_road_progress(progress_cb, "roads.hierarchy", 0.72, "Generated collector and local hierarchy")
     try:

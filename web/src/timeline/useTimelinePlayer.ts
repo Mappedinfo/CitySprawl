@@ -20,7 +20,7 @@ function clamp(v: number, min: number, max: number): number {
 
 export function useTimelinePlayer(stages: StageArtifact[], totalMs = 20_000): TimelineController {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
-  const [playing, setPlaying] = useState(true);
+  const [playing, setPlaying] = useState(false);
   const rafRef = useRef<number | null>(null);
   const lastRef = useRef<number | null>(null);
 

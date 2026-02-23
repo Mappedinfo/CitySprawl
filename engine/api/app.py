@@ -1,22 +1,70 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import threading
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi import HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from sse_starlette.sse import EventSourceResponse
 
 from engine.generator import generate_city, generate_city_staged
 from engine.models import CityArtifact, GenerateConfig, StagedCityResponse
-from engine.pydantic_compat import model_json_schema
+from engine.pydantic_compat import model_json_schema, model_dump
 
 _LOGGER = logging.getLogger("citygen.api.jobs")
 _JOBS_LOCK = threading.Lock()
 _JOBS: Dict[str, Dict[str, Any]] = {}
+
+# Type for streaming callback
+StreamCallback = Callable[[Dict[str, Any]], None]
+
+
+class StreamBuffer:
+    """Buffer for batching stream events to reduce network overhead."""
+
+    def __init__(self, flush_interval_ms: float = 80.0, max_batch_size: int = 15):
+        self.buffer: List[Dict[str, Any]] = []
+        self.last_flush = time.time()
+        self.flush_interval_ms = flush_interval_ms
+        self.max_batch_size = max_batch_size
+        self.sequence = 0
+        self._lock = threading.Lock()
+
+    def add(self, event: Dict[str, Any]) -> None:
+        with self._lock:
+            self.sequence += 1
+            event["sequence"] = self.sequence
+            event["timestamp_ms"] = int(time.time() * 1000)
+            self.buffer.append(event)
+
+    def should_flush(self) -> bool:
+        with self._lock:
+            if not self.buffer:
+                return False
+            return (
+                len(self.buffer) >= self.max_batch_size
+                or (time.time() - self.last_flush) * 1000 >= self.flush_interval_ms
+            )
+
+    def flush(self) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            if not self.buffer:
+                return None
+            events = self.buffer
+            self.buffer = []
+            self.last_flush = time.time()
+            return {"event": "batch", "data": json.dumps({"events": events})}
+
+    def get_pending_count(self) -> int:
+        with self._lock:
+            return len(self.buffer)
 
 
 def _now_iso() -> str:
@@ -385,6 +433,96 @@ def create_app() -> FastAPI:
         if result is None:
             raise HTTPException(status_code=409, detail="result_not_ready")
         return result
+
+    @app.post("/api/v2/generate_stream")
+    async def generate_stream(payload: GenerateConfig) -> EventSourceResponse:
+        """Stream city generation progress with incremental geometry data via SSE."""
+
+        async def event_generator():
+            buffer = StreamBuffer(flush_interval_ms=80.0, max_batch_size=15)
+            result_holder: Dict[str, Any] = {"result": None, "error": None, "done": False}
+            heartbeat_counter = 0
+
+            _LOGGER.info("SSE stream started")
+
+            def stream_cb(event: Dict[str, Any]) -> None:
+                _LOGGER.debug("stream_cb received event: %s", event.get("event_type"))
+                buffer.add(event)
+
+            def progress_cb(phase: str, progress: float, message: str) -> None:
+                _LOGGER.debug("progress_cb: %s %.0f%% %s", phase, progress * 100, message)
+                buffer.add({
+                    "event_type": "progress",
+                    "data": {"phase": phase, "progress": progress, "message": message},
+                })
+
+            def run_generation() -> None:
+                _LOGGER.info("Generation thread started")
+                try:
+                    result = generate_city_staged(
+                        payload,
+                        progress_cb=progress_cb,
+                        stream_cb=stream_cb,
+                    )
+                    result_holder["result"] = result
+                    _LOGGER.info("Generation completed successfully")
+                except Exception as exc:
+                    _LOGGER.error("Generation failed: %s", exc)
+                    result_holder["error"] = f"{exc.__class__.__name__}: {exc}"
+                finally:
+                    result_holder["done"] = True
+
+            # Send initial heartbeat to confirm connection
+            yield {"event": "heartbeat", "data": json.dumps({"status": "connected", "seq": 0})}
+            _LOGGER.info("Sent initial heartbeat")
+
+            # Start generation in background thread
+            gen_thread = threading.Thread(target=run_generation, daemon=True)
+            gen_thread.start()
+
+            # Yield events as they come in
+            try:
+                while not result_holder["done"] or buffer.get_pending_count() > 0:
+                    if buffer.should_flush():
+                        batch = buffer.flush()
+                        if batch:
+                            _LOGGER.debug("Yielding batch with events")
+                            yield batch
+                    else:
+                        # Send heartbeat every ~2 seconds (40 iterations * 50ms)
+                        heartbeat_counter += 1
+                        if heartbeat_counter >= 40:
+                            heartbeat_counter = 0
+                            yield {"event": "heartbeat", "data": json.dumps({"status": "generating", "seq": buffer.sequence})}
+                    await asyncio.sleep(0.05)  # 50ms poll interval
+
+                # Flush any remaining events
+                final_batch = buffer.flush()
+                if final_batch:
+                    _LOGGER.debug("Yielding final batch")
+                    yield final_batch
+
+                # Send completion or error event
+                if result_holder["error"]:
+                    _LOGGER.info("Sending error event: %s", result_holder["error"])
+                    yield {
+                        "event": "error",
+                        "data": json.dumps({"error": result_holder["error"]}),
+                    }
+                elif result_holder["result"]:
+                    # Send final result - include final_artifact flag for frontend detection
+                    result_data = model_dump(result_holder["result"])
+                    result_data["final_artifact"] = True  # Signal completion to frontend
+                    _LOGGER.info("Sending complete event with result")
+                    yield {
+                        "event": "complete",
+                        "data": json.dumps(result_data),
+                    }
+            except asyncio.CancelledError:
+                _LOGGER.info("SSE stream cancelled by client")
+                raise
+
+        return EventSourceResponse(event_generator())
 
     return app
 

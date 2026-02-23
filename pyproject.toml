@@ -15,6 +15,7 @@ dependencies = [
   "networkx>=3.2",
   "pydantic>=2.5",
   "shapely>=2.0",
+  "sse-starlette>=2.0",
 ]
 
 [project.optional-dependencies]

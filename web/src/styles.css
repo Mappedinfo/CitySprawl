@@ -202,10 +202,11 @@ button:disabled {
 }
 
 .canvas-stage-wrap {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
 }
 
 .stage-header {
@@ -393,6 +394,7 @@ button:disabled {
 
 .canvas-stage {
   position: relative;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   border-radius: 16px;
