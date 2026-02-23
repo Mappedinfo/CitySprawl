@@ -50,7 +50,14 @@ def test_culdesac_flags_survive_dedupe_route_and_syntax():
         _edge("c0", "a0", "a1", "collector", [Vec2(0.0, 0.0), Vec2(10.0, 0.0)]),
         _edge("c1-cul", "a1", "a2", "collector", [Vec2(10.0, 0.0), Vec2(20.0, 0.0)], flags=frozenset({"culdesac"})),
         _edge("c2", "a2", "a3", "collector", [Vec2(20.0, 0.0), Vec2(30.0, 0.0)]),
-        _edge("l-cul", "l0", "l1", "local", [Vec2(10.0, 5.0), Vec2(14.0, 8.0)], flags=frozenset({"culdesac"})),
+        _edge(
+            "l-cul",
+            "l0",
+            "l1",
+            "local",
+            [Vec2(10.0, 5.0), Vec2(14.0, 8.0), Vec2(17.0, 9.0)],
+            flags=frozenset({"culdesac", "local_rerouted"}),
+        ),
         _edge("l-dup", "l0b", "l1b", "local", [Vec2(10.0, 5.0), Vec2(14.0, 8.0)]),
     ]
 
@@ -58,6 +65,7 @@ def test_culdesac_flags_survive_dedupe_route_and_syntax():
     local_edges = [e for e in edges2 if e.road_class == "local"]
     assert len(local_edges) == 1
     assert "culdesac" in set(local_edges[0].flags)
+    assert "local_rerouted" in set(local_edges[0].flags)
     assert "-cul" in str(local_edges[0].id)
 
     slope = np.zeros((32, 32), dtype=np.float64)
@@ -73,6 +81,7 @@ def test_culdesac_flags_survive_dedupe_route_and_syntax():
     )
     local_after_route = [e for e in edges2 if e.road_class == "local"][0]
     assert "culdesac" in set(local_after_route.flags)
+    assert "local_rerouted" in set(local_after_route.flags)
     assert "-cul" in str(local_after_route.id)
 
     edges3, _, _ = apply_syntax_postprocess(
@@ -86,3 +95,4 @@ def test_culdesac_flags_survive_dedupe_route_and_syntax():
     flagged_edges = [e for e in edges3 if "-cul" in str(getattr(e, "id", ""))]
     assert flagged_edges
     assert all("culdesac" in set(getattr(e, "flags", [])) for e in flagged_edges)
+    assert any("local_rerouted" in set(getattr(e, "flags", [])) for e in flagged_edges if str(getattr(e, "road_class", "")) == "local")

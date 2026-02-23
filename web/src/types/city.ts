@@ -37,6 +37,20 @@ export type GenerateConfig = {
     collector_jitter: number;
     local_jitter: number;
     local_generator?: string;
+    local_geometry_mode?: string;
+    local_reroute_coverage?: string;
+    local_reroute_min_length_m?: number;
+    local_reroute_waypoint_spacing_m?: number;
+    local_reroute_max_waypoints?: number;
+    local_reroute_corridor_buffer_m?: number;
+    local_reroute_block_margin_m?: number;
+    local_reroute_slope_penalty_scale?: number;
+    local_reroute_river_penalty_scale?: number;
+    local_reroute_collector_snap_bias_m?: number;
+    local_reroute_smooth_iters?: number;
+    local_reroute_simplify_tol_m?: number;
+    local_reroute_max_edges_per_city?: number;
+    local_reroute_apply_to_grid_supplement?: boolean;
     local_classic_probe_step_m?: number;
     local_classic_seed_spacing_m?: number;
     local_classic_max_trace_len_m?: number;
@@ -211,6 +225,14 @@ export type CityArtifact = {
     road_edge_count_by_class?: Record<string, number>;
     parcel_count?: number;
     median_parcel_area_m2?: number;
+    local_reroute_candidate_count?: number;
+    local_reroute_applied_count?: number;
+    local_reroute_fallback_count?: number;
+    local_reroute_grid_supplement_applied_count?: number;
+    local_two_point_edge_count?: number;
+    local_two_point_edge_ratio?: number;
+    local_reroute_avg_path_points?: number;
+    local_reroute_avg_length_gain_ratio?: number;
     generation_profile?: string;
     degraded_mode?: boolean;
     notes: string[];
@@ -264,3 +286,25 @@ export type StagedCityResponse = {
 };
 
 export type PresetsResponse = Record<string, GenerateConfig>;
+
+export type GenerateJobLog = {
+  seq: number;
+  ts: string;
+  phase: string;
+  progress: number;
+  message: string;
+};
+
+export type GenerateJobStatusResponse = {
+  job_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | string;
+  progress: number;
+  phase: string;
+  message: string;
+  created_at: string;
+  updated_at: string;
+  error?: string | null;
+  logs: GenerateJobLog[];
+  last_log_seq: number;
+  result_ready: boolean;
+};

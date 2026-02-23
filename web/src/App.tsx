@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchHealth, fetchPresets, generateCity, generateCityStaged, generateCityV2 } from './api/client';
+import {
+  fetchGenerateJobResult,
+  fetchGenerateJobStatus,
+  fetchHealth,
+  fetchPresets,
+  generateCity,
+  generateCityStaged,
+  generateCityV2,
+  startGenerateCityV2Async,
+} from './api/client';
 import { drawStageScene, type LayerToggles } from './render/stageRenderer';
 import { heightGridToImageData } from './render/terrainImage';
 import { clampScale, screenToWorld, worldToScreen, type Viewport } from './render/viewport';
@@ -8,7 +17,16 @@ import { TerrainScene } from './render3d/TerrainScene';
 import { TimelinePlayer } from './timeline/TimelinePlayer';
 import { composeFallbackStagedResponse } from './timeline/stageComposer';
 import { useTimelinePlayer } from './timeline/useTimelinePlayer';
-import type { CityArtifact, GenerateConfig, HubRecord, PresetsResponse, StageArtifact, StagedCityResponse } from './types/city';
+import type {
+  CityArtifact,
+  GenerateConfig,
+  GenerateJobLog,
+  GenerateJobStatusResponse,
+  HubRecord,
+  PresetsResponse,
+  StageArtifact,
+  StagedCityResponse,
+} from './types/city';
 import { Controls } from './ui/Controls';
 import { CaptionsOverlay } from './ui/CaptionsOverlay';
 import { MetricsPanel } from './ui/MetricsPanel';
@@ -63,6 +81,15 @@ const USE_THREE_TERRAIN = true;
 type StageSource = 'none' | 'v2' | 'staged' | 'fallback';
 
 type LayerState = LayerToggles;
+type GenerationProgress = {
+  jobId: string;
+  status: string;
+  progress: number;
+  phase: string;
+  message: string;
+  logs: GenerateJobLog[];
+  updatedAt?: string;
+};
 
 // Default zoom multiplier for initial view - shows only part of the scene like a game
 const DEFAULT_ZOOM_MULTIPLIER = 2.2;
@@ -160,6 +187,7 @@ export default function App() {
   const [selectedPreset, setSelectedPreset] = useState('default');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [health, setHealth] = useState<string>('checking');
   const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ panX: 0, panY: 0, scale: 1 });
@@ -185,6 +213,7 @@ export default function App() {
     greenZones: true,
   });
   const [terrainBitmap, setTerrainBitmap] = useState<ImageBitmap | null>(null);
+  const generateRunRef = useRef(0);
 
   const artifact: CityArtifact | null = response?.final_artifact ?? null;
   const stages: StageArtifact[] = response?.stages ?? [];
@@ -317,17 +346,94 @@ export default function App() {
     return () => ro.disconnect();
   }, [artifact, currentStage, viewport, terrainBitmap, layers, timeline.currentTimeMs, reducedMotion]);
 
+  const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+  const pollAsyncV2Job = async (
+    jobId: string,
+    runId: number,
+  ): Promise<StagedCityResponse> => {
+    let sinceSeq = 0;
+    let mergedLogs: GenerateJobLog[] = [];
+    for (;;) {
+      const status: GenerateJobStatusResponse = await fetchGenerateJobStatus(jobId, sinceSeq);
+      sinceSeq = status.last_log_seq ?? sinceSeq;
+      if (status.logs?.length) {
+        mergedLogs = [...mergedLogs, ...status.logs].slice(-120);
+      }
+      if (generateRunRef.current !== runId) {
+        throw new Error('Generation cancelled by a newer request');
+      }
+      setGenerationProgress({
+        jobId,
+        status: status.status,
+        progress: Math.max(0, Math.min(1, status.progress ?? 0)),
+        phase: status.phase ?? '',
+        message: status.message ?? '',
+        logs: mergedLogs,
+        updatedAt: status.updated_at,
+      });
+      if (status.status === 'completed' && status.result_ready) {
+        const result = await fetchGenerateJobResult(jobId);
+        return result;
+      }
+      if (status.status === 'failed') {
+        throw new Error(status.error || status.message || 'Async generation failed');
+      }
+      await sleep(700);
+    }
+  };
+
   const onGenerate = async () => {
+    const runId = generateRunRef.current + 1;
+    generateRunRef.current = runId;
     setLoading(true);
     setError(null);
     setSelectedHubId(null);
+    setGenerationProgress(null);
     try {
       let nextResponse: StagedCityResponse | null = null;
       try {
-        const v2 = await generateCityV2(config);
-        nextResponse = v2;
-        setResponse(v2);
-        setSource('v2');
+        try {
+          const asyncStart = await startGenerateCityV2Async(config);
+          setGenerationProgress({
+            jobId: asyncStart.job_id,
+            status: asyncStart.status ?? 'queued',
+            progress: 0,
+            phase: 'queued',
+            message: 'Queued in backend',
+            logs: [],
+          });
+          const v2Async = await pollAsyncV2Job(asyncStart.job_id, runId);
+          nextResponse = v2Async;
+          setResponse(v2Async);
+          setSource('v2');
+        } catch (asyncErr) {
+          // If async progress endpoints are unavailable, fall back to existing synchronous v2 path.
+          if (generateRunRef.current !== runId) throw asyncErr;
+          setGenerationProgress((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  status: 'fallback',
+                  message: 'Async progress unavailable, falling back to synchronous V2',
+                  logs: [
+                    ...prev.logs,
+                    {
+                      seq: ((prev.logs.length ? prev.logs[prev.logs.length - 1].seq : 0) ?? 0) + 1,
+                      ts: new Date().toISOString(),
+                      phase: 'fallback',
+                      progress: prev.progress,
+                      message: `Async progress unavailable: ${asyncErr instanceof Error ? asyncErr.message : String(asyncErr)}`,
+                    },
+                  ].slice(-120),
+                }
+              : null,
+          );
+          const v2 = await generateCityV2(config);
+          nextResponse = v2;
+          setResponse(v2);
+          setSource('v2');
+        }
       } catch (v2Err) {
         try {
           const staged = await generateCityStaged(config);
@@ -361,6 +467,17 @@ export default function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      if (generateRunRef.current === runId) {
+        setGenerationProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: prev.status === 'failed' ? prev.status : 'idle',
+                progress: prev.progress >= 1 ? prev.progress : prev.progress,
+              }
+            : prev,
+        );
+      }
       setLoading(false);
     }
   };
@@ -494,6 +611,35 @@ export default function App() {
           ) : null}
           {error ? <div className="error-banner">{error}</div> : null}
         </div>
+
+        {generationProgress ? (
+          <div className="progress-panel hud-panel">
+            <div className="progress-topline">
+              <span className="progress-title">Backend Progress</span>
+              <span className={`progress-status status-${generationProgress.status}`}>
+                {generationProgress.status}
+              </span>
+              <span className="progress-percent">{Math.round((generationProgress.progress || 0) * 100)}%</span>
+            </div>
+            <div className="progress-bar-track" aria-label="generation progress">
+              <div className="progress-bar-fill" style={{ width: `${Math.round((generationProgress.progress || 0) * 100)}%` }} />
+            </div>
+            <div className="progress-message">
+              <code>{generationProgress.phase || 'waiting'}</code>
+              <span>{generationProgress.message || 'Waiting for backend...'}</span>
+            </div>
+            {generationProgress.logs.length ? (
+              <div className="progress-log-list">
+                {generationProgress.logs.slice(-6).map((log) => (
+                  <div key={`${log.seq}-${log.ts}`} className="progress-log-item">
+                    <span className="progress-log-phase">{log.phase}</span>
+                    <span className="progress-log-text">{log.message}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div
           ref={wrapperRef}

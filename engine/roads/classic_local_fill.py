@@ -55,6 +55,14 @@ class _State:
     depth: int = 0
 
 
+@dataclass
+class LocalTraceMeta:
+    block_idx: int
+    is_spine_candidate: bool = False
+    connected_to_collector: bool = False
+    culdesac: bool = False
+
+
 def _point_in_poly_or_close(poly, p: Vec2, tol: float = 1.0) -> bool:
     try:
         from shapely.geometry import Point  # type: ignore
@@ -140,7 +148,7 @@ def generate_classic_local_fill(
     blocks: Sequence[object],
     cfg: LocalClassicFillConfig,
     seed: int,
-) -> tuple[list[list[Vec2]], list[bool], list[str], dict[str, float]]:
+) -> tuple[list[list[Vec2]], list[bool], list[LocalTraceMeta], list[str], dict[str, float]]:
     rng = np.random.default_rng(int(seed) + 9203)
     probe = TerrainProbe(
         extent_m=float(extent_m),
@@ -197,6 +205,7 @@ def generate_classic_local_fill(
 
     traces: list[list[Vec2]] = []
     cul_flags: list[bool] = []
+    trace_meta: list[LocalTraceMeta] = []
     per_block_counts = defaultdict(int)
     notes = [f"local_classic_seed_states:{len(queue)}"]
     stop_reasons: dict[str, int] = {}
@@ -337,6 +346,23 @@ def generate_classic_local_fill(
 
         traces.append(pts)
         cul_flags.append(bool(cul))
+        d_col_end, _ = _nearest_road_distance_and_projection(pts[-1], collector_segments) if collector_segments else (float("inf"), None)
+        d_col_start, _ = _nearest_road_distance_and_projection(pts[0], collector_segments) if collector_segments else (float("inf"), None)
+        connected_to_collector = bool(min(d_col_start, d_col_end) < max(junction_probe * 2.0, 26.0))
+        trace_len = _polyline_length(pts)
+        is_spine_candidate = bool(
+            (not cul)
+            and st.depth <= 1
+            and trace_len >= max(float(cfg.local_classic_min_trace_len_m) * 1.35, 72.0)
+        )
+        trace_meta.append(
+            LocalTraceMeta(
+                block_idx=int(st.block_idx),
+                is_spine_candidate=is_spine_candidate,
+                connected_to_collector=connected_to_collector,
+                culdesac=bool(cul),
+            )
+        )
         if cul:
             cul_count += 1
         runtime_segments.extend(_polyline_segments(pts))
@@ -352,4 +378,4 @@ def generate_classic_local_fill(
         "local_classic_culdesac_count": float(cul_count),
         "local_classic_branch_enqueued_count": float(branch_enq),
     }
-    return traces, cul_flags, notes, numeric
+    return traces, cul_flags, trace_meta, notes, numeric

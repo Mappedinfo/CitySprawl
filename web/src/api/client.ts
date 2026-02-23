@@ -1,4 +1,10 @@
-import type { CityArtifact, GenerateConfig, PresetsResponse, StagedCityResponse } from '../types/city';
+import type {
+  CityArtifact,
+  GenerateConfig,
+  GenerateJobStatusResponse,
+  PresetsResponse,
+  StagedCityResponse,
+} from '../types/city';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
 
@@ -44,5 +50,26 @@ export async function generateCityV2(config: GenerateConfig): Promise<StagedCity
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
   });
+  return parseJson(res);
+}
+
+export async function startGenerateCityV2Async(config: GenerateConfig): Promise<{ job_id: string; status: string }> {
+  const res = await fetch(`${API_BASE}/api/v2/generate_async`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  return parseJson(res);
+}
+
+export async function fetchGenerateJobStatus(jobId: string, sinceSeq = 0): Promise<GenerateJobStatusResponse> {
+  const url = new URL(`${API_BASE}/api/v2/jobs/${jobId}`);
+  if (sinceSeq > 0) url.searchParams.set('since_seq', String(sinceSeq));
+  const res = await fetch(url.toString());
+  return parseJson(res);
+}
+
+export async function fetchGenerateJobResult(jobId: string): Promise<StagedCityResponse> {
+  const res = await fetch(`${API_BASE}/api/v2/jobs/${jobId}/result`);
   return parseJson(res);
 }

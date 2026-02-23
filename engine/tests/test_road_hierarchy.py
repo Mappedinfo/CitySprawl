@@ -23,6 +23,9 @@ def test_hierarchical_roads_emit_collector_and_dense_locals():
                 "collector_jitter": 0.14,
                 "local_jitter": 0.18,
                 "local_generator": "classic_sprawl",
+                "local_geometry_mode": "classic_sprawl_rerouted",
+                "local_reroute_coverage": "selective",
+                "local_reroute_min_length_m": 60.0,
                 "local_classic_probe_step_m": 16.0,
                 "local_classic_seed_spacing_m": 110.0,
                 "river_setback_m": 16.0,
@@ -51,5 +54,8 @@ def test_hierarchical_roads_emit_collector_and_dense_locals():
     assert artifact.metrics.intersection_t_junction_count >= 1.0
     assert artifact.metrics.local_culdesac_edge_count_final > 0.0
     assert artifact.metrics.local_culdesac_preserved_ratio > 0.0
+    assert artifact.metrics.local_reroute_applied_count > 0
+    assert artifact.metrics.local_two_point_edge_ratio < 0.98
     assert any("Collector generator: classic_turtle" in n or "Collector generator: grid_clip" in n for n in artifact.metrics.notes)
     assert any("Local generator:" in n for n in artifact.metrics.notes)
+    assert any("local geometry reroute" in n.lower() for n in artifact.metrics.notes)

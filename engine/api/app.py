@@ -1,13 +1,120 @@
 from __future__ import annotations
 
+import logging
+import threading
+from datetime import datetime, timezone
 from typing import Any, Dict
+from uuid import uuid4
 
 from fastapi import FastAPI
+from fastapi import HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from engine.generator import generate_city, generate_city_staged
 from engine.models import CityArtifact, GenerateConfig, StagedCityResponse
 from engine.pydantic_compat import model_json_schema
+
+_LOGGER = logging.getLogger("citygen.api.jobs")
+_JOBS_LOCK = threading.Lock()
+_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _append_job_log(job: Dict[str, Any], *, phase: str, progress: float, message: str) -> None:
+    seq = int(job.get("last_log_seq", 0)) + 1
+    entry = {
+        "seq": seq,
+        "ts": _now_iso(),
+        "phase": str(phase),
+        "progress": float(max(0.0, min(1.0, progress))),
+        "message": str(message),
+    }
+    logs = job.setdefault("logs", [])
+    logs.append(entry)
+    if len(logs) > 400:
+        del logs[: len(logs) - 400]
+    job["last_log_seq"] = seq
+    job["updated_at"] = entry["ts"]
+    job["phase"] = entry["phase"]
+    job["progress"] = entry["progress"]
+    job["message"] = entry["message"]
+    _LOGGER.info("[job:%s] %s %.0f%% %s", job.get("id"), entry["phase"], entry["progress"] * 100.0, entry["message"])
+
+
+def _job_status_payload(job: Dict[str, Any], *, since_seq: int = 0) -> Dict[str, Any]:
+    logs = [l for l in list(job.get("logs", [])) if int(l.get("seq", 0)) > int(since_seq)]
+    return {
+        "job_id": job["id"],
+        "status": job.get("status", "queued"),
+        "progress": float(job.get("progress", 0.0)),
+        "phase": str(job.get("phase", "")),
+        "message": str(job.get("message", "")),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "error": job.get("error"),
+        "logs": logs,
+        "last_log_seq": int(job.get("last_log_seq", 0)),
+        "result_ready": bool(job.get("result") is not None and str(job.get("status")) == "completed"),
+    }
+
+
+def _run_generate_job(job_id: str, payload: GenerateConfig) -> None:
+    def _progress_cb(phase: str, progress: float, message: str) -> None:
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if not job:
+                return
+            _append_job_log(job, phase=phase, progress=progress, message=message)
+
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "running"
+        _append_job_log(job, phase="queued", progress=0.0, message="Job accepted by backend")
+    try:
+        result = generate_city_staged(payload, progress_cb=_progress_cb)
+    except Exception as exc:
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if not job:
+                return
+            job["status"] = "failed"
+            job["error"] = f"{exc.__class__.__name__}: {exc}"
+            _append_job_log(job, phase="failed", progress=float(job.get("progress", 0.0)), message=job["error"])
+        return
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return
+        job["result"] = result
+        job["status"] = "completed"
+        _append_job_log(job, phase="completed", progress=1.0, message="Result ready")
+
+
+def _create_generate_job(payload: GenerateConfig) -> str:
+    job_id = f"gen-{uuid4().hex[:12]}"
+    job = {
+        "id": job_id,
+        "status": "queued",
+        "progress": 0.0,
+        "phase": "queued",
+        "message": "Queued",
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "error": None,
+        "logs": [],
+        "last_log_seq": 0,
+        "result": None,
+    }
+    with _JOBS_LOCK:
+        _JOBS[job_id] = job
+    thread = threading.Thread(target=_run_generate_job, args=(job_id, payload), daemon=True, name=f"citygen-{job_id}")
+    thread.start()
+    return job_id
 
 
 def _default_preset() -> GenerateConfig:
@@ -251,6 +358,33 @@ def create_app() -> FastAPI:
     @app.post("/api/v2/generate", response_model=StagedCityResponse)
     def generate_v2(payload: GenerateConfig) -> StagedCityResponse:
         return generate_city_staged(payload)
+
+    @app.post("/api/v2/generate_async")
+    def generate_v2_async(payload: GenerateConfig) -> Dict[str, Any]:
+        job_id = _create_generate_job(payload)
+        return {"job_id": job_id, "status": "queued"}
+
+    @app.get("/api/v2/jobs/{job_id}")
+    def get_generate_job(job_id: str, since_seq: int = Query(default=0, ge=0)) -> Dict[str, Any]:
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="job_not_found")
+            return _job_status_payload(job, since_seq=int(since_seq))
+
+    @app.get("/api/v2/jobs/{job_id}/result", response_model=StagedCityResponse)
+    def get_generate_job_result(job_id: str) -> StagedCityResponse:
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="job_not_found")
+            status = str(job.get("status", "queued"))
+            if status == "failed":
+                raise HTTPException(status_code=409, detail=str(job.get("error") or "job_failed"))
+            result = job.get("result")
+        if result is None:
+            raise HTTPException(status_code=409, detail="result_not_ready")
+        return result
 
     return app
 

@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import time
 
 from engine.api.app import app
 
@@ -96,6 +97,10 @@ def test_generate_v2_success():
             "classic_probe_step_m": 20.0,
             "classic_seed_spacing_m": 220.0,
             "local_generator": "classic_sprawl",
+            "local_geometry_mode": "classic_sprawl_rerouted",
+            "local_reroute_coverage": "selective",
+            "local_reroute_min_length_m": 60.0,
+            "local_reroute_max_edges_per_city": 80,
             "local_classic_probe_step_m": 16.0,
             "local_classic_seed_spacing_m": 90.0,
             "local_classic_continue_prob": 0.6,
@@ -118,6 +123,9 @@ def test_generate_v2_success():
     assert "collector_classic_riverfront_seed_count" in metrics
     assert "local_culdesac_edge_count_final" in metrics
     assert "local_culdesac_preserved_ratio" in metrics
+    assert "local_reroute_candidate_count" in metrics
+    assert "local_reroute_applied_count" in metrics
+    assert "local_two_point_edge_ratio" in metrics
 
 
 def test_generate_v2_accepts_legacy_tensor_collector_fields_for_compat():
@@ -133,6 +141,7 @@ def test_generate_v2_accepts_legacy_tensor_collector_fields_for_compat():
             "tensor_step_m": 22.0,
             "local_generator": "classic_sprawl",
             "local_classic_probe_step_m": 18.0,
+            "local_geometry_mode": "classic_sprawl_rerouted",
         },
         "naming": {"provider": "mock"},
     }
@@ -153,3 +162,51 @@ def test_generate_staged_validation_error():
 def test_generate_v2_validation_error():
     res = client.post("/api/v2/generate", json={"seed": -1})
     assert res.status_code == 422
+
+
+def test_generate_v2_async_progress_and_result():
+    payload = {
+        "seed": 13,
+        "grid_resolution": 96,
+        "terrain": {"noise_octaves": 4, "relief_strength": 1.0},
+        "hydrology": {"enable": True, "accum_threshold": 0.02, "min_river_length_m": 80.0},
+        "hubs": {"t1_count": 1, "t2_count": 2, "t3_count": 8, "min_distance_m": 80.0},
+        "roads": {
+            "collector_generator": "classic_turtle",
+            "local_generator": "classic_sprawl",
+            "local_geometry_mode": "classic_sprawl_rerouted",
+            "local_reroute_coverage": "selective",
+            "local_reroute_max_edges_per_city": 40,
+        },
+        "naming": {"provider": "mock"},
+    }
+    start_res = client.post("/api/v2/generate_async", json=payload)
+    assert start_res.status_code == 200
+    body = start_res.json()
+    job_id = body["job_id"]
+    assert job_id
+
+    last_seq = 0
+    final_status = None
+    for _ in range(800):
+        res = client.get(f"/api/v2/jobs/{job_id}", params={"since_seq": last_seq})
+        assert res.status_code == 200
+        status = res.json()
+        final_status = status
+        assert "progress" in status
+        assert "logs" in status
+        if status.get("logs"):
+            last_seq = max(last_seq, max(int(l.get("seq", 0)) for l in status["logs"]))
+        if status["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.05)
+    assert final_status is not None
+    assert final_status["status"] == "completed", final_status
+    assert final_status["result_ready"] is True
+    assert final_status["last_log_seq"] >= 1
+
+    result_res = client.get(f"/api/v2/jobs/{job_id}/result")
+    assert result_res.status_code == 200
+    result_body = result_res.json()
+    assert "final_artifact" in result_body
+    assert "stages" in result_body

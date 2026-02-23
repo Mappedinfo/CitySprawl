@@ -74,3 +74,16 @@ Validate the upgraded generation pipeline for:
 3. Confirm local streets inside neighborhoods are not predominantly parallel clip lines
 4. Confirm visible cul-de-sacs exist but do not dominate every block
 5. Confirm parcel shapes remain valid and do not regress into large numbers of ultra-thin strips near curvy local roads
+
+## Scenario H: Local Geometry Reroute (new)
+
+1. Ensure `roads.local_geometry_mode=classic_sprawl_rerouted` and `roads.local_reroute_coverage=selective`
+2. Generate both `river_valley` and `hilly_sparse`
+3. Confirm key local streets (collector connectors / neighborhood spines / longer segments) are not mostly two-point straight edges
+4. Confirm slope-area locals show some terrain-following detours instead of direct cross-slope links
+5. Confirm local-to-collector transitions look smoother than direct "needle" connections
+6. Export JSON and confirm:
+   - `metrics.local_reroute_candidate_count > 0`
+   - `metrics.local_reroute_applied_count > 0`
+   - `metrics.local_two_point_edge_ratio` is lower than the pre-reroute baseline for the same seed
+   - local cul-de-sac edges still preserve `-cul` in `roads.edges[].id`

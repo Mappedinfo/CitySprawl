@@ -43,6 +43,20 @@ class RoadsConfig(StrictModel):
     collector_jitter: float = Field(default=0.16, ge=0.0, le=1.0)
     local_jitter: float = Field(default=0.22, ge=0.0, le=1.0)
     local_generator: str = Field(default="classic_sprawl", min_length=1)
+    local_geometry_mode: str = Field(default="classic_sprawl_rerouted", min_length=1)
+    local_reroute_coverage: str = Field(default="selective", min_length=1)
+    local_reroute_min_length_m: float = Field(default=70.0, gt=1.0, le=5000.0)
+    local_reroute_waypoint_spacing_m: float = Field(default=26.0, gt=1.0, le=500.0)
+    local_reroute_max_waypoints: int = Field(default=16, ge=2, le=128)
+    local_reroute_corridor_buffer_m: float = Field(default=38.0, gt=1.0, le=500.0)
+    local_reroute_block_margin_m: float = Field(default=2.0, ge=0.0, le=100.0)
+    local_reroute_slope_penalty_scale: float = Field(default=1.15, ge=0.1, le=10.0)
+    local_reroute_river_penalty_scale: float = Field(default=1.35, ge=0.1, le=20.0)
+    local_reroute_collector_snap_bias_m: float = Field(default=22.0, ge=0.0, le=200.0)
+    local_reroute_smooth_iters: int = Field(default=1, ge=0, le=8)
+    local_reroute_simplify_tol_m: float = Field(default=3.0, ge=0.0, le=50.0)
+    local_reroute_max_edges_per_city: int = Field(default=180, ge=0, le=5000)
+    local_reroute_apply_to_grid_supplement: bool = True
     local_classic_probe_step_m: float = Field(default=18.0, gt=1.0, le=500.0)
     local_classic_seed_spacing_m: float = Field(default=110.0, gt=5.0, le=5000.0)
     local_classic_max_trace_len_m: float = Field(default=420.0, gt=10.0, le=50000.0)
@@ -310,6 +324,14 @@ class Metrics(StrictModel):
     local_culdesac_edge_count_pre_topology: int = 0
     local_culdesac_edge_count_final: int = 0
     local_culdesac_preserved_ratio: float = 0.0
+    local_reroute_candidate_count: int = 0
+    local_reroute_applied_count: int = 0
+    local_reroute_fallback_count: int = 0
+    local_reroute_grid_supplement_applied_count: int = 0
+    local_two_point_edge_count: int = 0
+    local_two_point_edge_ratio: float = 0.0
+    local_reroute_avg_path_points: float = 0.0
+    local_reroute_avg_length_gain_ratio: float = 0.0
     generation_profile: str = "balanced"
     degraded_mode: bool = False
     notes: List[str] = Field(default_factory=list)

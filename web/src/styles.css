@@ -273,6 +273,124 @@ button:disabled {
   white-space: nowrap;
 }
 
+.progress-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.progress-topline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.progress-title {
+  color: var(--ink);
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.progress-status {
+  font-size: 0.74rem;
+  color: var(--ink-dim);
+  border: 1px solid rgba(108, 223, 255, 0.18);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(8, 12, 20, 0.5);
+}
+
+.progress-status.status-running {
+  color: var(--accent);
+}
+
+.progress-status.status-completed {
+  color: rgba(124, 255, 188, 0.95);
+}
+
+.progress-status.status-failed {
+  color: var(--warn);
+}
+
+.progress-percent {
+  margin-left: auto;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.progress-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(8, 12, 20, 0.8);
+  border: 1px solid rgba(108, 223, 255, 0.14);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(92, 238, 255, 0.65), rgba(255, 196, 88, 0.8));
+  box-shadow: 0 0 14px rgba(92, 238, 255, 0.16);
+  transition: width 160ms linear;
+}
+
+.progress-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--ink-dim);
+  font-size: 0.78rem;
+}
+
+.progress-message code {
+  border-radius: 8px;
+  border: 1px solid rgba(108, 223, 255, 0.16);
+  background: rgba(8, 12, 20, 0.72);
+  padding: 2px 6px;
+  color: var(--ink);
+  font-size: 0.72rem;
+}
+
+.progress-message span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-log-list {
+  display: grid;
+  gap: 4px;
+  max-height: 118px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.progress-log-item {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 0.74rem;
+  color: var(--ink-dim);
+}
+
+.progress-log-phase {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-log-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .canvas-stage {
   position: relative;
   min-width: 0;

@@ -4,7 +4,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 import numpy as np
 from shapely.geometry import MultiPoint, Polygon as ShapelyPolygon, box
@@ -58,6 +58,7 @@ from engine.terrain.river_area import build_river_area_polygons
 from engine.traffic import assign_edge_flows
 
 SCHEMA_VERSION = "0.1.0"
+ProgressCallback = Callable[[str, float, str], None]
 
 
 @dataclass
@@ -117,6 +118,29 @@ def _river_area_stats(
         main = max(selected_rivers_raw, key=lambda r: float(r.get("flow", 0.0)))
         main_len = float(main.get("length_m", 0.0))
     return coverage, river_area_m2, main_len
+
+
+def _emit_progress(progress_cb: ProgressCallback | None, phase: str, progress: float, message: str) -> None:
+    if progress_cb is None:
+        return
+    try:
+        progress_cb(str(phase), float(max(0.0, min(1.0, progress))), str(message))
+    except Exception:
+        # progress reporting must never break generation
+        return
+
+
+def _progress_subrange(progress_cb: ProgressCallback | None, start: float, end: float) -> ProgressCallback | None:
+    if progress_cb is None:
+        return None
+    s = float(start)
+    e = float(end)
+
+    def _cb(phase: str, progress: float, message: str) -> None:
+        p = s + (e - s) * float(max(0.0, min(1.0, progress)))
+        _emit_progress(progress_cb, phase, p, message)
+
+    return _cb
 
 
 def _polygon2d_from_shapely(poly: BaseGeometry, poly_id: str) -> Polygon2D | None:
@@ -253,7 +277,8 @@ def _build_adaptive_rivers(config: GenerateConfig, terrain_bundle: Any) -> Tuple
     return selected_rivers_raw, river_areas, coverage, river_area_m2, main_len, clipped_ratio
 
 
-def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
+def _generate_core_context(config: GenerateConfig, *, progress_cb: ProgressCallback | None = None) -> _CoreGenerationContext:
+    _emit_progress(progress_cb, "terrain", 0.02, "Generating terrain and base hydrology")
     terrain_bundle = generate_terrain_bundle(
         resolution=config.grid_resolution,
         extent_m=config.extent_m,
@@ -264,11 +289,13 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         accum_threshold=config.hydrology.accum_threshold,
         min_river_length_m=config.hydrology.min_river_length_m,
     )
+    _emit_progress(progress_cb, "rivers", 0.16, "Selecting and shaping river geometry")
 
     selected_rivers_raw, river_areas, river_coverage_ratio, river_area_m2, main_river_length_m, river_area_clipped_ratio = _build_adaptive_rivers(
         config,
         terrain_bundle,
     )
+    _emit_progress(progress_cb, "hubs", 0.28, "Sampling hub centers")
 
     hub_result = generate_hubs(
         seed=config.seed,
@@ -280,6 +307,7 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         t3_count=config.hubs.t3_count,
         min_distance_m=config.hubs.min_distance_m,
     )
+    _emit_progress(progress_cb, "roads", 0.36, "Generating road network")
 
     roads_cfg = config.roads
     collector_generator_value = str(getattr(roads_cfg, "collector_generator", "classic_turtle"))
@@ -315,6 +343,20 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         collector_jitter=roads_cfg.collector_jitter,
         local_jitter=roads_cfg.local_jitter,
         local_generator=roads_cfg.local_generator,
+        local_geometry_mode=roads_cfg.local_geometry_mode,
+        local_reroute_coverage=roads_cfg.local_reroute_coverage,
+        local_reroute_min_length_m=roads_cfg.local_reroute_min_length_m,
+        local_reroute_waypoint_spacing_m=roads_cfg.local_reroute_waypoint_spacing_m,
+        local_reroute_max_waypoints=roads_cfg.local_reroute_max_waypoints,
+        local_reroute_corridor_buffer_m=roads_cfg.local_reroute_corridor_buffer_m,
+        local_reroute_block_margin_m=roads_cfg.local_reroute_block_margin_m,
+        local_reroute_slope_penalty_scale=roads_cfg.local_reroute_slope_penalty_scale,
+        local_reroute_river_penalty_scale=roads_cfg.local_reroute_river_penalty_scale,
+        local_reroute_collector_snap_bias_m=roads_cfg.local_reroute_collector_snap_bias_m,
+        local_reroute_smooth_iters=roads_cfg.local_reroute_smooth_iters,
+        local_reroute_simplify_tol_m=roads_cfg.local_reroute_simplify_tol_m,
+        local_reroute_max_edges_per_city=roads_cfg.local_reroute_max_edges_per_city,
+        local_reroute_apply_to_grid_supplement=roads_cfg.local_reroute_apply_to_grid_supplement,
         local_classic_probe_step_m=roads_cfg.local_classic_probe_step_m,
         local_classic_seed_spacing_m=roads_cfg.local_classic_seed_spacing_m,
         local_classic_max_trace_len_m=roads_cfg.local_classic_max_trace_len_m,
@@ -372,7 +414,9 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         syntax_prune_low_choice_collectors=roads_cfg.syntax_prune_low_choice_collectors,
         syntax_prune_quantile=roads_cfg.syntax_prune_quantile,
         river_areas=river_areas,
+        progress_cb=_progress_subrange(progress_cb, 0.36, 0.78),
     )
+    _emit_progress(progress_cb, "terrain_visuals", 0.82, "Preparing terrain previews and contours")
     terrain_visuals = compute_terrain_classification(
         height=terrain_bundle.height,
         slope=terrain_bundle.slope,
@@ -386,6 +430,7 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         max_resolution=128,
         contour_count=12,
     )
+    _emit_progress(progress_cb, "naming", 0.90, "Assigning place names")
 
     provider = get_toponymy_provider(config.naming.provider)
     road_edges_for_naming = [
@@ -395,6 +440,7 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
     names = assign_hub_names(hub_result.hubs, road_edges_for_naming, provider, config.seed)
     name_map = {hub.id: names[i] for i, hub in enumerate(hub_result.hubs)}
 
+    _emit_progress(progress_cb, "core_complete", 1.0, "Core infrastructure generation complete")
     return _CoreGenerationContext(
         terrain_bundle=terrain_bundle,
         hub_result=hub_result,
@@ -546,6 +592,21 @@ def _build_city_artifact_from_core(
         metric_notes.append("Local generator: grid_clip")
     if local_trace_count > 0:
         metric_notes.append(f"Classic local fill traces: {local_trace_count}")
+    local_reroute_candidates = int(metric_values.get("local_reroute_candidate_count", 0.0))
+    local_reroute_applied = int(metric_values.get("local_reroute_applied_count", 0.0))
+    local_reroute_fallback = int(metric_values.get("local_reroute_fallback_count", 0.0))
+    if local_reroute_candidates > 0 or local_reroute_applied > 0:
+        metric_notes.append(
+            f"Classic local geometry reroute: applied {local_reroute_applied}/{max(local_reroute_candidates, 1)} "
+            f"(fallback {local_reroute_fallback})"
+        )
+        metric_notes.append(
+            f"Local reroute coverage: {str(getattr(config.roads, 'local_reroute_coverage', 'selective'))}"
+        )
+    if "local_two_point_edge_ratio" in metric_values:
+        metric_notes.append(
+            f"Local two-point edge ratio: {float(metric_values.get('local_two_point_edge_ratio', 0.0)):.2f}"
+        )
     local_cul_final = int(metric_values.get("local_culdesac_edge_count_final", 0.0))
     local_cul_pre = int(metric_values.get("local_culdesac_edge_count_pre_topology", 0.0))
     if local_cul_pre > 0 or local_cul_final > 0:
@@ -595,6 +656,14 @@ def _build_city_artifact_from_core(
         local_culdesac_edge_count_pre_topology=int(metric_values.get("local_culdesac_edge_count_pre_topology", 0.0)),
         local_culdesac_edge_count_final=int(metric_values.get("local_culdesac_edge_count_final", 0.0)),
         local_culdesac_preserved_ratio=float(metric_values.get("local_culdesac_preserved_ratio", 0.0)),
+        local_reroute_candidate_count=int(metric_values.get("local_reroute_candidate_count", 0.0)),
+        local_reroute_applied_count=int(metric_values.get("local_reroute_applied_count", 0.0)),
+        local_reroute_fallback_count=int(metric_values.get("local_reroute_fallback_count", 0.0)),
+        local_reroute_grid_supplement_applied_count=int(metric_values.get("local_reroute_grid_supplement_applied_count", 0.0)),
+        local_two_point_edge_count=int(metric_values.get("local_two_point_edge_count", 0.0)),
+        local_two_point_edge_ratio=float(metric_values.get("local_two_point_edge_ratio", 0.0)),
+        local_reroute_avg_path_points=float(metric_values.get("local_reroute_avg_path_points", 0.0)),
+        local_reroute_avg_length_gain_ratio=float(metric_values.get("local_reroute_avg_length_gain_ratio", 0.0)),
         generation_profile=str(getattr(config.quality, "profile", "balanced")),
         degraded_mode=False,
         notes=metric_notes,
@@ -691,7 +760,10 @@ def _build_analysis_and_land_layers(
     config: GenerateConfig,
     ctx: _CoreGenerationContext,
     artifact: CityArtifact,
+    *,
+    progress_cb: ProgressCallback | None = None,
 ) -> _AnalysisAndLandLayers:
+    _emit_progress(progress_cb, "analysis", 0.08, "Computing suitability and flood analysis")
     analysis = compute_suitability_and_flood(
         height=ctx.terrain_bundle.height,
         slope=ctx.terrain_bundle.slope,
@@ -716,6 +788,7 @@ def _build_analysis_and_land_layers(
     )
 
     traffic_result = assign_edge_flows(artifact.hubs, artifact.roads)
+    _emit_progress(progress_cb, "buildings", 0.42, "Generating buildings and green zones previews")
     building_footprints = generate_building_footprints(
         seed=config.seed,
         extent_m=config.extent_m,
@@ -736,7 +809,9 @@ def _build_analysis_and_land_layers(
         resource_sites=resource_sites,
         flood_risk_preview=analysis.flood_risk,
     )
+    _emit_progress(progress_cb, "parcels", 0.90, "Classifying blocks and parcels")
     _refresh_final_metrics(artifact, config)
+    _emit_progress(progress_cb, "analysis_complete", 1.0, "Analysis and land layers complete")
 
     return _AnalysisAndLandLayers(
         analysis=analysis,
@@ -751,27 +826,33 @@ def _build_analysis_and_land_layers(
     )
 
 
-def generate_city(config: GenerateConfig) -> CityArtifact:
+def generate_city(config: GenerateConfig, *, progress_cb: ProgressCallback | None = None) -> CityArtifact:
     t0 = perf_counter()
-    ctx = _generate_core_context(config)
+    _emit_progress(progress_cb, "start", 0.0, "Starting city generation")
+    ctx = _generate_core_context(config, progress_cb=_progress_subrange(progress_cb, 0.02, 0.62))
+    _emit_progress(progress_cb, "artifact", 0.68, "Building city artifact payload")
     artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
-    _build_analysis_and_land_layers(config, ctx, artifact)
+    _build_analysis_and_land_layers(config, ctx, artifact, progress_cb=_progress_subrange(progress_cb, 0.70, 0.96))
     duration_ms = (perf_counter() - t0) * 1000.0
     artifact.meta.duration_ms = float(duration_ms)
     artifact.meta.generated_at_utc = datetime.now(timezone.utc).isoformat()
+    _emit_progress(progress_cb, "done", 1.0, "City generation complete")
     return artifact
 
 
-def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
+def generate_city_staged(config: GenerateConfig, *, progress_cb: ProgressCallback | None = None) -> StagedCityResponse:
     t0 = perf_counter()
-    ctx = _generate_core_context(config)
+    _emit_progress(progress_cb, "start", 0.0, "Starting staged city generation")
+    ctx = _generate_core_context(config, progress_cb=_progress_subrange(progress_cb, 0.02, 0.62))
+    _emit_progress(progress_cb, "artifact", 0.68, "Building base artifact")
     final_artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
-    layers = _build_analysis_and_land_layers(config, ctx, final_artifact)
+    layers = _build_analysis_and_land_layers(config, ctx, final_artifact, progress_cb=_progress_subrange(progress_cb, 0.70, 0.93))
 
     duration_ms = (perf_counter() - t0) * 1000.0
     final_artifact.meta.duration_ms = float(duration_ms)
     final_artifact.meta.generated_at_utc = datetime.now(timezone.utc).isoformat()
 
+    _emit_progress(progress_cb, "stages", 0.96, "Building timeline stages")
     stages = build_stages(
         final_artifact=final_artifact,
         suitability_preview=layers.analysis.suitability,
@@ -789,6 +870,7 @@ def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
         land_blocks=layers.land_blocks,
         parcel_lots=layers.parcel_lots,
     )
+    _emit_progress(progress_cb, "done", 1.0, "Staged city generation complete")
     return StagedCityResponse(final_artifact=final_artifact, stages=stages)
 
 

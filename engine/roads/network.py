@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 from math import atan2, cos, hypot, pi, sin
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 try:
@@ -45,6 +45,18 @@ class RoadBuildResult:
     edges: List[BuiltRoadEdge]
     candidate_debug: List[Tuple[str, Vec2, Vec2, float]]
     metrics: Dict[str, float]
+
+
+RoadProgressCallback = Callable[[str, float, str], None]
+
+
+def _emit_road_progress(progress_cb: RoadProgressCallback | None, phase: str, progress: float, message: str) -> None:
+    if progress_cb is None:
+        return
+    try:
+        progress_cb(str(phase), float(max(0.0, min(1.0, progress))), str(message))
+    except Exception:
+        return
 
 
 def _world_to_grid(pos: Vec2, extent_m: float, resolution: int) -> Tuple[int, int]:
@@ -202,6 +214,8 @@ def _astar_grid(
     river_mask: np.ndarray,
     slope_factor: float,
     river_penalty: float,
+    allowed_mask: Optional[np.ndarray] = None,
+    extra_cost: Optional[np.ndarray] = None,
 ) -> Optional[List[Tuple[int, int]]]:
     rows, cols = slope_norm.shape
     if rows == 0 or cols == 0:
@@ -241,10 +255,13 @@ def _astar_grid(
             nx = cx + dx
             if not in_bounds(ny, nx):
                 continue
+            if allowed_mask is not None and (ny >= allowed_mask.shape[0] or nx >= allowed_mask.shape[1] or not bool(allowed_mask[ny, nx])):
+                continue
             step_len = 1.41421356237 if (dx != 0 and dy != 0) else 1.0
             slope_cost = slope_factor * float(slope_norm[ny, nx] ** 2)
             river_cost = river_penalty if bool(river_mask[ny, nx]) else 0.0
-            step_cost = step_len * (1.0 + slope_cost) + river_cost
+            extra = float(extra_cost[ny, nx]) if extra_cost is not None else 0.0
+            step_cost = step_len * (1.0 + slope_cost) + river_cost + extra
             tentative = current_g + step_cost
             nbr = (ny, nx)
             if tentative >= g_score.get(nbr, float("inf")):
@@ -253,6 +270,102 @@ def _astar_grid(
             g_score[nbr] = tentative
             heapq.heappush(open_heap, (tentative + h(ny, nx), tentative, nbr))
     return None
+
+
+def _corridor_allowed_mask(
+    corridor_geom: object | None,
+    *,
+    extent_m: float,
+    route_res: int,
+) -> Optional[np.ndarray]:
+    if corridor_geom is None:
+        return None
+    try:
+        from shapely.geometry import Point  # type: ignore
+    except Exception:
+        return None
+    try:
+        if getattr(corridor_geom, "is_empty", True):
+            return None
+    except Exception:
+        return None
+    mask = np.zeros((route_res, route_res), dtype=bool)
+    for iy in range(route_res):
+        for ix in range(route_res):
+            p = _grid_to_world(ix, iy, extent_m, route_res)
+            try:
+                inside = bool(corridor_geom.covers(Point(float(p.x), float(p.y))))
+            except Exception:
+                try:
+                    inside = bool(corridor_geom.buffer(0.5).contains(Point(float(p.x), float(p.y))))
+                except Exception:
+                    inside = False
+            mask[iy, ix] = inside
+    return mask
+
+
+def _route_points_with_cost_mask(
+    start: Vec2,
+    end: Vec2,
+    *,
+    extent_m: float,
+    slope: np.ndarray,
+    river_mask: np.ndarray,
+    road_class: str,
+    corridor_geom: object | None = None,
+    slope_penalty_scale: float = 1.0,
+    river_penalty_scale: float = 1.0,
+) -> Optional[List[Vec2]]:
+    route_res = min(192, max(96, slope.shape[0] // 2 if slope.shape[0] > 0 else 96))
+    slope_grid = _resample_grid_nn(slope, route_res).astype(np.float64)
+    river_grid = _resample_grid_nn(river_mask.astype(np.float64), route_res) > 0.5
+    slope_max = float(np.max(slope_grid)) if slope_grid.size else 0.0
+    slope_norm = slope_grid / (slope_max + 1e-9) if slope_max > 0 else np.zeros_like(slope_grid)
+
+    sx, sy = _world_to_grid(start, extent_m, route_res)
+    gx, gy = _world_to_grid(end, extent_m, route_res)
+    start_cell = (sy, sx)
+    goal_cell = (gy, gx)
+
+    allowed_mask = _corridor_allowed_mask(corridor_geom, extent_m=extent_m, route_res=route_res)
+    if allowed_mask is not None:
+        # Always allow endpoints even if rasterization missed them at the boundary.
+        allowed_mask[sy, sx] = True
+        allowed_mask[gy, gx] = True
+
+    if road_class == "arterial":
+        slope_factor = 18.0
+        river_pen = 1500.0
+    elif road_class == "collector":
+        slope_factor = 10.0
+        river_pen = 700.0
+    else:
+        slope_factor = 8.0
+        river_pen = 850.0
+    cells = _astar_grid(
+        start_cell,
+        goal_cell,
+        slope_norm,
+        river_grid,
+        float(slope_factor) * float(slope_penalty_scale),
+        float(river_pen) * float(river_penalty_scale),
+        allowed_mask=allowed_mask,
+        extra_cost=None,
+    )
+    if not cells or len(cells) < 2:
+        return None
+    pts = [_grid_to_world(x, y, extent_m, route_res) for (y, x) in cells]
+    pts[0] = start
+    pts[-1] = end
+    cleaned: List[Vec2] = []
+    for p in pts:
+        if not cleaned or p.distance_to(cleaned[-1]) > 1e-6:
+            cleaned.append(p)
+    if len(cleaned) >= 3:
+        cleaned = _rdp(cleaned, epsilon=max(4.0, extent_m * 0.0008))
+        cleaned[0] = start
+        cleaned[-1] = end
+    return cleaned
 
 
 def _perpendicular_distance(p: Vec2, a: Vec2, b: Vec2) -> float:
@@ -765,15 +878,7 @@ def _append_line_edge(
     slope_penalty: float,
     river_cross_penalty: float,
 ) -> None:
-    coords = list(getattr(line, "coords", []))
-    if len(coords) < 2:
-        return
-
-    pts: List[Vec2] = []
-    for x, y in coords:
-        p = Vec2(float(x), float(y))
-        if not pts or p.distance_to(pts[-1]) > 1e-6:
-            pts.append(p)
+    pts = _line_to_points(line)
     if len(pts) < 2:
         return
     _append_polyline_edge(
@@ -789,6 +894,51 @@ def _append_line_edge(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
     )
+
+
+def _line_to_points(line) -> List[Vec2]:
+    coords = list(getattr(line, "coords", []))
+    if len(coords) < 2:
+        return []
+    pts: List[Vec2] = []
+    for x, y in coords:
+        p = Vec2(float(x), float(y))
+        if not pts or p.distance_to(pts[-1]) > 1e-6:
+            pts.append(p)
+    return pts
+
+
+def _nearest_distance_to_road_classes(
+    p: Vec2,
+    nodes: Sequence[BuiltRoadNode],
+    edges: Sequence[BuiltRoadEdge],
+    classes: set[str],
+) -> float:
+    node_lookup = {n.id: n for n in nodes}
+    best = float("inf")
+    for e in edges:
+        if str(e.road_class) not in classes:
+            continue
+        pts = list(e.path_points or [])
+        if not pts or len(pts) < 2:
+            u = node_lookup.get(e.u)
+            v = node_lookup.get(e.v)
+            if u is None or v is None:
+                continue
+            pts = [u.pos, v.pos]
+        for i in range(len(pts) - 1):
+            seg = Segment(pts[i], pts[i + 1])
+            if seg.length() <= 1e-6:
+                continue
+            # projection distance without importing extra helpers
+            vseg = seg.vector()
+            denom = max(vseg.dot(vseg), 1e-9)
+            t = max(0.0, min(1.0, (p - seg.p0).dot(vseg) / denom))
+            proj = seg.point_at(t)
+            d = p.distance_to(proj)
+            if d < best:
+                best = d
+    return float(best)
 
 
 def _append_polyline_edge(
@@ -937,6 +1087,20 @@ def _generate_hierarchy_linework(
     collector_jitter: float,
     local_jitter: float,
     local_generator: str,
+    local_geometry_mode: str,
+    local_reroute_coverage: str,
+    local_reroute_min_length_m: float,
+    local_reroute_waypoint_spacing_m: float,
+    local_reroute_max_waypoints: int,
+    local_reroute_corridor_buffer_m: float,
+    local_reroute_block_margin_m: float,
+    local_reroute_slope_penalty_scale: float,
+    local_reroute_river_penalty_scale: float,
+    local_reroute_collector_snap_bias_m: float,
+    local_reroute_smooth_iters: int,
+    local_reroute_simplify_tol_m: float,
+    local_reroute_max_edges_per_city: int,
+    local_reroute_apply_to_grid_supplement: bool,
     local_classic_probe_step_m: float,
     local_classic_seed_spacing_m: float,
     local_classic_max_trace_len_m: float,
@@ -1003,6 +1167,12 @@ def _generate_hierarchy_linework(
         "local_classic_degraded": 0.0,
         "local_classic_trace_count": 0.0,
         "local_culdesac_edge_count_pre_topology": 0.0,
+        "local_reroute_candidate_count": 0.0,
+        "local_reroute_applied_count": 0.0,
+        "local_reroute_fallback_count": 0.0,
+        "local_reroute_grid_supplement_applied_count": 0.0,
+        "local_reroute_avg_path_points": 0.0,
+        "local_reroute_avg_length_gain_ratio": 0.0,
         "collector_tensor_enabled": 0.0,
         "collector_tensor_degraded": 0.0,
         "collector_tensor_trace_count": 0.0,
@@ -1158,6 +1328,7 @@ def _generate_hierarchy_linework(
     local_backend = (local_generator or "classic_sprawl").lower()
     local_added = 0
     local_need_grid_supplement = False
+    pending_local_entries: list[dict] = []
     if local_backend == "classic_sprawl":
         try:
             from engine.roads.classic_local_fill import LocalClassicFillConfig, generate_classic_local_fill  # type: ignore
@@ -1168,7 +1339,7 @@ def _generate_hierarchy_linework(
         else:
             try:
                 numeric["local_classic_enabled"] = 1.0
-                local_traces, local_cul_flags, local_notes, local_numeric = generate_classic_local_fill(
+                local_traces, local_cul_flags, local_trace_meta, local_notes, local_numeric = generate_classic_local_fill(
                     extent_m=extent_m,
                     height=height,
                     slope=slope,
@@ -1217,21 +1388,22 @@ def _generate_hierarchy_linework(
                     numeric["local_classic_degraded"] = 1.0
                 else:
                     for trace_idx, pts in enumerate(local_traces):
-                        edge_suffix = "-cul" if trace_idx < len(local_cul_flags) and bool(local_cul_flags[trace_idx]) else ""
-                        _append_polyline_edge(
-                            pts,
-                            road_class="local",
-                            width_m=6.0,
-                            render_order=2,
-                            edge_id_suffix=edge_suffix,
-                            edge_flags={"culdesac"} if edge_suffix else None,
-                            nodes=nodes,
-                            edges=edges,
-                            extent_m=extent_m,
-                            slope=slope,
-                            river_mask=river_mask,
-                            slope_penalty=slope_penalty * 0.8,
-                            river_cross_penalty=river_cross_penalty * 1.25,
+                        cul = bool(trace_idx < len(local_cul_flags) and local_cul_flags[trace_idx])
+                        meta = local_trace_meta[trace_idx] if trace_idx < len(local_trace_meta) else None
+                        flags = set()
+                        if cul:
+                            flags.add("culdesac")
+                        if bool(getattr(meta, "is_spine_candidate", False)):
+                            flags.add("local_spine")
+                        pending_local_entries.append(
+                            {
+                                "pts": list(pts),
+                                "cul": cul,
+                                "meta": meta,
+                                "is_grid_supplement": False,
+                                "flags": flags,
+                                "length_m": _polyline_length(pts),
+                            }
                         )
                         local_added += 1
                     numeric["local_culdesac_edge_count_pre_topology"] = float(sum(1 for v in local_cul_flags if bool(v)))
@@ -1270,18 +1442,29 @@ def _generate_hierarchy_linework(
                     max_lines=max_lines,
                 )
                 for line in lines:
-                    _append_line_edge(
-                        line,
-                        road_class="local",
-                        width_m=6.0,
-                        render_order=2,
-                        nodes=nodes,
-                        edges=edges,
-                        extent_m=extent_m,
-                        slope=slope,
-                        river_mask=river_mask,
-                        slope_penalty=slope_penalty * 0.8,
-                        river_cross_penalty=river_cross_penalty * 1.25,
+                    pts = _line_to_points(line)
+                    if len(pts) < 2:
+                        continue
+                    mid = pts[len(pts) // 2]
+                    d_col = min(
+                        _nearest_distance_to_road_classes(pts[0], nodes, edges, {"collector", "arterial"}),
+                        _nearest_distance_to_road_classes(pts[-1], nodes, edges, {"collector", "arterial"}),
+                        _nearest_distance_to_road_classes(mid, nodes, edges, {"collector", "arterial"}),
+                    )
+                    pending_local_entries.append(
+                        {
+                            "pts": pts,
+                            "cul": False,
+                            "meta": {
+                                "block_idx": int(bi),
+                                "is_spine_candidate": bool(_polyline_length(pts) >= max(local_reroute_min_length_m * 1.2, 110.0)),
+                                "connected_to_collector": bool(d_col <= max(local_reroute_collector_snap_bias_m * 1.5, 40.0)),
+                                "culdesac": False,
+                            },
+                            "is_grid_supplement": True,
+                            "flags": {"local_grid_supplement"},
+                            "length_m": _polyline_length(pts),
+                        }
                     )
                     local_added += 1
         if local_backend != "classic_sprawl":
@@ -1292,6 +1475,134 @@ def _generate_hierarchy_linework(
         notes.append("local_generator:classic_sprawl")
     if local_backend == "classic_sprawl" and local_need_grid_supplement:
         notes.append("local_generator:classic_sprawl")
+
+    # Hybrid local geometry reroute: keep classic/local topology but reroute selected geometries
+    reroute_applied = 0
+    reroute_fallback = 0
+    reroute_grid_applied = 0
+    reroute_candidate_count = 0
+    reroute_path_points_sum = 0.0
+    reroute_length_gain_sum = 0.0
+    reroute_length_gain_n = 0
+    if pending_local_entries and str(local_geometry_mode or "classic_sprawl_rerouted").lower() != "trace_direct":
+        try:
+            from engine.roads.local_reroute import (  # type: ignore
+                LocalRerouteConfig,
+                reroute_local_polyline,
+                select_local_reroute_candidates,
+            )
+        except Exception:
+            notes.append("local_geometry_reroute:degraded_unavailable")
+        else:
+            lr_cfg = LocalRerouteConfig(
+                local_geometry_mode=str(local_geometry_mode),
+                local_reroute_coverage=str(local_reroute_coverage),
+                local_reroute_min_length_m=float(local_reroute_min_length_m),
+                local_reroute_waypoint_spacing_m=float(local_reroute_waypoint_spacing_m),
+                local_reroute_max_waypoints=int(local_reroute_max_waypoints),
+                local_reroute_corridor_buffer_m=float(local_reroute_corridor_buffer_m),
+                local_reroute_block_margin_m=float(local_reroute_block_margin_m),
+                local_reroute_slope_penalty_scale=float(local_reroute_slope_penalty_scale),
+                local_reroute_river_penalty_scale=float(local_reroute_river_penalty_scale),
+                local_reroute_collector_snap_bias_m=float(local_reroute_collector_snap_bias_m),
+                local_reroute_smooth_iters=int(local_reroute_smooth_iters),
+                local_reroute_simplify_tol_m=float(local_reroute_simplify_tol_m),
+                local_reroute_max_edges_per_city=int(local_reroute_max_edges_per_city),
+                local_reroute_apply_to_grid_supplement=bool(local_reroute_apply_to_grid_supplement),
+            )
+            candidate_idxs = select_local_reroute_candidates(
+                pending_local_entries,
+                coverage=str(local_reroute_coverage),
+                min_length_m=float(local_reroute_min_length_m),
+                max_edges=int(local_reroute_max_edges_per_city),
+                apply_to_grid_supplement=bool(local_reroute_apply_to_grid_supplement),
+            )
+            reroute_candidate_count = int(len(candidate_idxs))
+            for idx in candidate_idxs:
+                entry = pending_local_entries[idx]
+                entry_flags = set(entry.get("flags", set()) or set())
+                entry_flags.add("local_candidate_reroute")
+                entry["flags"] = entry_flags
+                meta = entry.get("meta")
+                block_idx = -1
+                if meta is not None:
+                    block_idx = int(getattr(meta, "block_idx", block_idx))
+                    if isinstance(meta, dict):
+                        block_idx = int(meta.get("block_idx", block_idx))
+                block_poly = local_blocks[block_idx] if 0 <= block_idx < len(local_blocks) else None
+
+                def _route_seg(a: Vec2, b: Vec2, corridor_geom, slope_scale: float, river_scale: float):
+                    return _route_points_with_cost_mask(
+                        a,
+                        b,
+                        extent_m=extent_m,
+                        slope=slope,
+                        river_mask=river_mask,
+                        road_class="local",
+                        corridor_geom=corridor_geom,
+                        slope_penalty_scale=slope_scale,
+                        river_penalty_scale=river_scale,
+                    )
+
+                rerouted_pts, reroute_numeric, reroute_notes = reroute_local_polyline(
+                    entry["pts"],
+                    route_segment_fn=_route_seg,
+                    cfg=lr_cfg,
+                    block_poly=block_poly,
+                    river_union=river_union,
+                    river_setback_m=float(river_setback_m),
+                )
+                for rn in reroute_notes:
+                    if rn.startswith("local_reroute:") and "fallback" in rn:
+                        # keep notes compact
+                        continue
+                if float(reroute_numeric.get("applied", 0.0)) > 0.5 and len(rerouted_pts) >= 2:
+                    entry["pts"] = rerouted_pts
+                    entry_flags = set(entry.get("flags", set()) or set())
+                    entry_flags.add("local_rerouted")
+                    entry["flags"] = entry_flags
+                    reroute_applied += 1
+                    reroute_path_points_sum += float(reroute_numeric.get("path_points", len(rerouted_pts)))
+                    reroute_length_gain_sum += float(reroute_numeric.get("length_gain_ratio", 1.0))
+                    reroute_length_gain_n += 1
+                    if bool(entry.get("is_grid_supplement", False)):
+                        reroute_grid_applied += 1
+                else:
+                    reroute_fallback += 1
+            if reroute_candidate_count > 0:
+                notes.append(f"local_geometry_reroute:applied:{reroute_applied}/{reroute_candidate_count}")
+                notes.append(f"local_reroute_coverage:{str(local_reroute_coverage)}")
+
+    numeric["local_reroute_candidate_count"] = float(reroute_candidate_count)
+    numeric["local_reroute_applied_count"] = float(reroute_applied)
+    numeric["local_reroute_fallback_count"] = float(reroute_fallback)
+    numeric["local_reroute_grid_supplement_applied_count"] = float(reroute_grid_applied)
+    numeric["local_reroute_avg_path_points"] = float(reroute_path_points_sum / reroute_applied) if reroute_applied > 0 else 0.0
+    numeric["local_reroute_avg_length_gain_ratio"] = (
+        float(reroute_length_gain_sum / reroute_length_gain_n) if reroute_length_gain_n > 0 else 0.0
+    )
+
+    # Append local edges after optional reroute so intersections see final local geometry.
+    for entry in pending_local_entries:
+        entry_flags = set(entry.get("flags", set()) or set())
+        cul = bool(entry.get("cul", False) or ("culdesac" in entry_flags))
+        if cul:
+            entry_flags.add("culdesac")
+        _append_polyline_edge(
+            entry.get("pts", []),
+            road_class="local",
+            width_m=6.0,
+            render_order=2,
+            edge_id_suffix="-cul" if cul else "",
+            edge_flags=entry_flags or None,
+            nodes=nodes,
+            edges=edges,
+            extent_m=extent_m,
+            slope=slope,
+            river_mask=river_mask,
+            slope_penalty=slope_penalty * 0.8,
+            river_cross_penalty=river_cross_penalty * 1.25,
+        )
     numeric["local_added_count"] = float(local_added)
     return notes, numeric
 
@@ -1462,6 +1773,20 @@ def generate_roads(
     collector_jitter: float = 0.16,
     local_jitter: float = 0.22,
     local_generator: str = "classic_sprawl",
+    local_geometry_mode: str = "classic_sprawl_rerouted",
+    local_reroute_coverage: str = "selective",
+    local_reroute_min_length_m: float = 70.0,
+    local_reroute_waypoint_spacing_m: float = 26.0,
+    local_reroute_max_waypoints: int = 16,
+    local_reroute_corridor_buffer_m: float = 38.0,
+    local_reroute_block_margin_m: float = 2.0,
+    local_reroute_slope_penalty_scale: float = 1.15,
+    local_reroute_river_penalty_scale: float = 1.35,
+    local_reroute_collector_snap_bias_m: float = 22.0,
+    local_reroute_smooth_iters: int = 1,
+    local_reroute_simplify_tol_m: float = 3.0,
+    local_reroute_max_edges_per_city: int = 180,
+    local_reroute_apply_to_grid_supplement: bool = True,
     local_classic_probe_step_m: float = 18.0,
     local_classic_seed_spacing_m: float = 110.0,
     local_classic_max_trace_len_m: float = 420.0,
@@ -1519,6 +1844,7 @@ def generate_roads(
     syntax_prune_low_choice_collectors: bool = True,
     syntax_prune_quantile: float = 0.15,
     river_areas: Optional[Sequence[object]] = None,
+    progress_cb: Optional[RoadProgressCallback] = None,
 ) -> RoadBuildResult:
     # Deprecated compatibility alias: keep accepting tensor-streamline config names while routing
     # collector generation through the classic turtle growth backend.
@@ -1549,8 +1875,10 @@ def generate_roads(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
     )
+    _emit_road_progress(progress_cb, "roads.candidate_graph", 0.08, "Built road candidate graph")
 
     selected_backbone = _generate_backbone_edges(graph, loop_budget=loop_budget)
+    _emit_road_progress(progress_cb, "roads.backbone", 0.16, "Selected arterial backbone")
     edges: List[BuiltRoadEdge] = []
     for u, v, data in selected_backbone:
         edges.append(
@@ -1579,8 +1907,10 @@ def generate_roads(
         river_cross_penalty=river_cross_penalty,
         seed=seed,
     )
+    _emit_road_progress(progress_cb, "roads.branches", 0.24, "Generated branch roads")
 
     nodes, edges, extra = _dedupe_and_snap(nodes, edges)
+    _emit_road_progress(progress_cb, "roads.snap", 0.30, "Snapped and deduplicated backbone/branches")
     _route_all_edges(
         nodes=nodes,
         edges=edges,
@@ -1590,6 +1920,7 @@ def generate_roads(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
     )
+    _emit_road_progress(progress_cb, "roads.route_initial", 0.40, "Routed arterial and branch geometry")
     hierarchy_notes, hierarchy_numeric = _generate_hierarchy_linework(
         extent_m=extent_m,
         height=height,
@@ -1606,6 +1937,20 @@ def generate_roads(
         collector_jitter=collector_jitter,
         local_jitter=local_jitter,
         local_generator=local_generator,
+        local_geometry_mode=local_geometry_mode,
+        local_reroute_coverage=local_reroute_coverage,
+        local_reroute_min_length_m=local_reroute_min_length_m,
+        local_reroute_waypoint_spacing_m=local_reroute_waypoint_spacing_m,
+        local_reroute_max_waypoints=local_reroute_max_waypoints,
+        local_reroute_corridor_buffer_m=local_reroute_corridor_buffer_m,
+        local_reroute_block_margin_m=local_reroute_block_margin_m,
+        local_reroute_slope_penalty_scale=local_reroute_slope_penalty_scale,
+        local_reroute_river_penalty_scale=local_reroute_river_penalty_scale,
+        local_reroute_collector_snap_bias_m=local_reroute_collector_snap_bias_m,
+        local_reroute_smooth_iters=local_reroute_smooth_iters,
+        local_reroute_simplify_tol_m=local_reroute_simplify_tol_m,
+        local_reroute_max_edges_per_city=local_reroute_max_edges_per_city,
+        local_reroute_apply_to_grid_supplement=local_reroute_apply_to_grid_supplement,
         local_classic_probe_step_m=local_classic_probe_step_m,
         local_classic_seed_spacing_m=local_classic_seed_spacing_m,
         local_classic_max_trace_len_m=local_classic_max_trace_len_m,
@@ -1657,6 +2002,7 @@ def generate_roads(
         hubs=hubs,
         river_areas=river_areas,
     )
+    _emit_road_progress(progress_cb, "roads.hierarchy", 0.72, "Generated collector and local hierarchy")
     try:
         from engine.roads.intersections import apply_intersection_operators  # type: ignore
     except Exception:
@@ -1671,6 +2017,7 @@ def generate_roads(
             split_tolerance_m=float(intersection_split_tolerance_m),
             min_dangle_length_m=float(min_dangle_length_m),
         )
+    _emit_road_progress(progress_cb, "roads.intersections", 0.82, "Applied intersection operators")
     try:
         from engine.roads.syntax import apply_syntax_postprocess  # type: ignore
     except Exception:
@@ -1685,6 +2032,7 @@ def generate_roads(
             prune_low_choice_collectors=bool(syntax_prune_low_choice_collectors),
             prune_quantile=float(syntax_prune_quantile),
         )
+    _emit_road_progress(progress_cb, "roads.syntax", 0.88, "Applied space syntax postprocess")
     nodes, edges, extra2 = _dedupe_and_snap(nodes, edges)
     extra = {
         "duplicate_edge_count": int(extra.get("duplicate_edge_count", 0)) + int(extra2.get("duplicate_edge_count", 0)),
@@ -1699,7 +2047,17 @@ def generate_roads(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
     )
+    _emit_road_progress(progress_cb, "roads.route_final", 0.97, "Finalized routed road geometry")
     local_cul_final = sum(1 for e in edges if str(getattr(e, "road_class", "")) == "local" and _has_edge_flag(e, "culdesac"))
+    local_edges_final = [e for e in edges if str(getattr(e, "road_class", "")) == "local"]
+    local_two_point_count = 0
+    local_gt2_count = 0
+    for e in local_edges_final:
+        pts = list(getattr(e, "path_points", []) or [])
+        if len(pts) <= 2:
+            local_two_point_count += 1
+        else:
+            local_gt2_count += 1
     metrics = _metrics(nodes, edges, extra)
     metrics.update({k: float(v) for k, v in hierarchy_numeric.items()})
     metrics.update({k: float(v) for k, v in inter_numeric.items()})
@@ -1707,6 +2065,9 @@ def generate_roads(
     metrics["local_culdesac_edge_count_final"] = float(local_cul_final)
     local_cul_pre = float(metrics.get("local_culdesac_edge_count_pre_topology", 0.0))
     metrics["local_culdesac_preserved_ratio"] = float(local_cul_final / local_cul_pre) if local_cul_pre > 0.0 else 0.0
+    metrics["local_two_point_edge_count"] = float(local_two_point_count)
+    metrics["local_edges_with_gt2_points_count"] = float(local_gt2_count)
+    metrics["local_two_point_edge_ratio"] = float(local_two_point_count / len(local_edges_final)) if local_edges_final else 0.0
     # Encode textual notes in numeric flags/metrics-compatible shape; generator will translate to human notes.
     metrics["collector_generator_classic_turtle"] = float(1.0 if any("collector_generator:classic_turtle" == n for n in hierarchy_notes) else 0.0)
     metrics["collector_generator_tensor_streamline"] = float(1.0 if any("collector_generator:tensor_streamline" == n for n in hierarchy_notes) else 0.0)
@@ -1717,4 +2078,5 @@ def generate_roads(
     metrics["local_generator_degraded"] = float(1.0 if any("local_generator_degraded" in n for n in hierarchy_notes) else 0.0)
     metrics["syntax_note_count"] = float(len(syntax_notes))
     metrics["intersection_note_count"] = float(len(inter_notes))
+    _emit_road_progress(progress_cb, "roads.done", 1.0, "Road generation complete")
     return RoadBuildResult(nodes=nodes, edges=edges, candidate_debug=candidate_debug, metrics=metrics)

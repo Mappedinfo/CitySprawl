@@ -46,7 +46,7 @@ def test_classic_local_fill_generates_curvy_locals_and_respects_setback():
     river_mask = np.zeros((96, 96), dtype=bool)
     river_union = Polygon([(300.0, 260.0), (340.0, 260.0), (340.0, 420.0), (300.0, 420.0)])
 
-    traces, cul_flags, notes, numeric = generate_classic_local_fill(
+    traces, cul_flags, trace_meta, notes, numeric = generate_classic_local_fill(
         extent_m=600.0,
         height=height,
         slope=slope,
@@ -75,8 +75,9 @@ def test_classic_local_fill_generates_curvy_locals_and_respects_setback():
     assert numeric.get("local_classic_enabled", 0.0) > 0.5
     assert len(traces) > 0
     assert len(cul_flags) == len(traces)
+    assert len(trace_meta) == len(traces)
+    assert any(hasattr(m, "block_idx") for m in trace_meta)
     forbidden = river_union.buffer(12.0)
     for tr in traces:
         for p in tr:
             assert not forbidden.contains(Point(p.x, p.y))
-
