@@ -16,7 +16,6 @@ import { drawStageScene, drawStreamingTraces, type LayerToggles } from './render
 import { heightGridToImageData } from './render/terrainImage';
 import { clampScale, screenToWorld, worldToScreen, type Viewport } from './render/viewport';
 import { TerrainScene } from './render3d/TerrainScene';
-import { TimelinePlayer } from './timeline/TimelinePlayer';
 import { composeFallbackStagedResponse } from './timeline/stageComposer';
 import { useTimelinePlayer } from './timeline/useTimelinePlayer';
 import type {
@@ -270,6 +269,14 @@ function buildBackendStepStates(progress: GenerationProgress | null): BackendSte
   });
 }
 
+function stageLocalProgress(stages: StageArtifact[], idx: number, currentTimeMs: number, totalMs: number): number {
+  const start = stages[idx]?.timestamp_ms ?? 0;
+  const end = idx < stages.length - 1 ? (stages[idx + 1]?.timestamp_ms ?? totalMs) : totalMs;
+  if (currentTimeMs <= start) return 0;
+  if (currentTimeMs >= end) return 1;
+  return clamp01((currentTimeMs - start) / Math.max(end - start, 1));
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -336,11 +343,14 @@ export default function App() {
 
   const artifact: CityArtifact | null = response?.final_artifact ?? null;
   const stages: StageArtifact[] = response?.stages ?? [];
+  const hasStages = stages.length > 0;
 
   const timeline = useTimelinePlayer(stages, TIMELINE_TOTAL_MS);
   const currentStage = stages[timeline.currentStageIndex] ?? null;
   const stageShowsTerrain = !currentStage || currentStage.visible_layers.includes('terrain');
   const backendStepStates = useMemo(() => buildBackendStepStates(generationProgress), [generationProgress]);
+  const sprawlProgressMode = hasStages && !loading && generationProgress?.status !== 'failed' ? 'progress+stages' : 'progress-only';
+  const canStageClick = sprawlProgressMode === 'progress+stages';
 
   const selectedHub = useMemo<HubRecord | null>(() => {
     if (!artifact || !selectedHubId) return null;
@@ -907,9 +917,9 @@ export default function App() {
         </div>
 
         {generationProgress ? (
-          <div className="progress-panel hud-panel">
+          <div className={`progress-panel hud-panel ${canStageClick ? 'progress-panel-has-stages' : ''}`}>
             <div className="progress-topline">
-              <span className="progress-title">Backend Progress</span>
+              <span className="progress-title">Sprawl Progress</span>
               <span className={`progress-status status-${generationProgress.status}`}>
                 {generationProgress.status}
               </span>
@@ -947,6 +957,55 @@ export default function App() {
                     <span className="progress-log-text">{log.message}</span>
                   </div>
                 ))}
+              </div>
+            ) : null}
+
+            {canStageClick ? (
+              <div className="sprawl-stage-section">
+                <div className="sprawl-stage-head">
+                  <span className="sprawl-stage-title">Stage Preview</span>
+                  <span className={`timeline-auto-pill ${timeline.playing ? 'is-playing' : ''}`}>
+                    {timeline.playing ? 'AUTO' : 'PAUSED'}
+                  </span>
+                </div>
+                <div className="timeline-step-rail" role="tablist" aria-label="Sprawl stage preview">
+                  {stages.map((stage, idx) => {
+                    const localProgress = stageLocalProgress(stages, idx, timeline.currentTimeMs, timeline.totalMs);
+                    const isActive = idx === timeline.currentStageIndex;
+                    const isDone = idx < timeline.currentStageIndex || (idx === timeline.currentStageIndex && localProgress >= 0.999);
+                    const isReached = idx <= timeline.currentStageIndex;
+                    return (
+                      <button
+                        key={`${stage.stage_id}-${idx}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        className={[
+                          'timeline-step-button',
+                          isActive ? 'is-active' : '',
+                          isDone ? 'is-done' : '',
+                          isReached ? 'is-reached' : 'is-pending',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        onClick={() => timeline.selectStage(idx)}
+                        title={`${idx + 1}. ${stage.title_zh} (${stage.title})`}
+                      >
+                        <div className="timeline-step-bead-row" aria-hidden="true">
+                          <span className="timeline-step-bead" />
+                          <span className="timeline-step-mini-track">
+                            <span className="timeline-step-mini-fill" style={{ width: `${Math.round(localProgress * 100)}%` }} />
+                          </span>
+                        </div>
+                        <div className="timeline-step-meta">
+                          <span className="timeline-step-index">{idx + 1}</span>
+                          <span className="timeline-step-label">{stage.title_zh}</span>
+                          <span className="timeline-step-sub">{stage.title}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
           </div>
@@ -1003,16 +1062,6 @@ export default function App() {
           {artifact ? <NorthArrow /> : null}
         </div>
 
-        <TimelinePlayer
-          stages={stages}
-          currentStageIndex={timeline.currentStageIndex}
-          currentTimeMs={timeline.currentTimeMs}
-          totalMs={timeline.totalMs}
-          playing={timeline.playing}
-          onTogglePlay={timeline.togglePlaying}
-          onSeek={timeline.seek}
-          onSelectStage={timeline.selectStage}
-        />
       </main>
 
       <div className="side-stack">

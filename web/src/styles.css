@@ -465,6 +465,31 @@ button:disabled {
   white-space: nowrap;
 }
 
+.progress-panel-has-stages {
+  gap: 10px;
+}
+
+.sprawl-stage-section {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(108, 223, 255, 0.12);
+}
+
+.sprawl-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sprawl-stage-title {
+  color: var(--ink);
+  font-size: 0.76rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .canvas-stage {
   position: relative;
   flex: 1 1 0;
