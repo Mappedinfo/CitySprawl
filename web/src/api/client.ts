@@ -37,3 +37,12 @@ export async function generateCityStaged(config: GenerateConfig): Promise<Staged
   });
   return parseJson(res);
 }
+
+export async function generateCityV2(config: GenerateConfig): Promise<StagedCityResponse> {
+  const res = await fetch(`${API_BASE}/api/v2/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  return parseJson(res);
+}

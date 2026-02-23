@@ -6,7 +6,7 @@ from typing import Iterable, List, Sequence, Tuple
 
 from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
-from shapely.ops import unary_union
+from shapely.ops import split, unary_union
 
 from engine.models import PedestrianPath
 
@@ -16,6 +16,19 @@ class ParcelizationResult:
     pedestrian_paths: List[PedestrianPath]
     pedestrian_corridors_by_block: List[object]
     parcel_polygons_by_block: List[List[Polygon]]
+
+
+@dataclass
+class FrontageParcelConfig:
+    residential_target_area_m2: float = 1800.0
+    mixed_target_area_m2: float = 2600.0
+    min_frontage_m: float = 10.0
+    min_depth_m: float = 12.0
+    parcel_local_morphology_coupling: bool = True
+    parcel_culdesac_frontage_relaxation: float = 0.18
+    parcel_local_depth_bias: float = 0.10
+    parcel_curvilinear_split_bias: float = 0.20
+    seed: int = 0
 
 
 def _iter_lines(geom) -> Iterable[LineString]:
@@ -152,4 +165,213 @@ def generate_pedestrian_paths_and_parcels(
         pedestrian_paths=pedestrian_paths,
         pedestrian_corridors_by_block=corridors_by_block,
         parcel_polygons_by_block=parcels_by_block,
+    )
+
+
+def _bbox_dims(poly: Polygon) -> Tuple[float, float]:
+    minx, miny, maxx, maxy = poly.bounds
+    return float(maxx - minx), float(maxy - miny)
+
+
+def _recursive_split_polygon(
+    poly: Polygon,
+    *,
+    target_area_m2: float,
+    min_frontage_m: float,
+    min_depth_m: float,
+    rng_seed: int,
+    curvilinear_split_bias: float = 0.0,
+    depth: int = 0,
+    max_depth: int = 7,
+) -> List[Polygon]:
+    if poly.is_empty:
+        return []
+    poly = poly.buffer(0)
+    if poly.is_empty or not isinstance(poly, Polygon):
+        return [g for g in getattr(poly, 'geoms', []) if isinstance(g, Polygon)]
+
+    area = float(poly.area)
+    w0, h0 = _bbox_dims(poly)
+    if depth >= max_depth or area <= max(target_area_m2 * 1.35, 450.0):
+        if min(w0, h0) < min(min_frontage_m, min_depth_m) * 0.7:
+            return []
+        return [poly]
+    if min(w0, h0) < min(min_frontage_m, min_depth_m) * 1.2:
+        return [poly]
+
+    angle = _dominant_angle_deg(poly)
+    rot = affinity.rotate(poly, -angle, origin='centroid')
+    minx, miny, maxx, maxy = rot.bounds
+    w = maxx - minx
+    h = maxy - miny
+    if min(w, h) < min(min_frontage_m, min_depth_m) * 1.2:
+        return [poly]
+
+    split_along_x = w >= h
+    if curvilinear_split_bias > 0.0 and abs(w - h) / max(max(w, h), 1e-6) < 0.35:
+        # Curvilinear neighborhoods tend to produce less axis-stable lots; allow more varied split axes.
+        parity = ((rng_seed + depth * 17) % 7) / 7.0
+        if parity < min(0.95, float(curvilinear_split_bias)):
+            split_along_x = not split_along_x
+    # Deterministic pseudo-random jitter without introducing a global RNG dependency.
+    jitter_span = 0.12 + 0.12 * max(0.0, min(1.0, float(curvilinear_split_bias)))
+    jitter = ((((rng_seed + depth * 131) % 997) / 997.0) - 0.5) * jitter_span
+    t = max(0.35, min(0.65, 0.5 + jitter))
+    if split_along_x:
+        x = minx + t * w
+        cutter = LineString([(x, miny - 10.0), (x, maxy + 10.0)])
+    else:
+        y = miny + t * h
+        cutter = LineString([(minx - 10.0, y), (maxx + 10.0, y)])
+
+    try:
+        pieces_rot = split(rot, cutter)
+    except Exception:
+        return [poly]
+    pieces_world = []
+    for geom in getattr(pieces_rot, 'geoms', [pieces_rot]):
+        if not isinstance(geom, Polygon):
+            continue
+        world = affinity.rotate(geom, angle, origin=poly.centroid).buffer(0)
+        if world.is_empty:
+            continue
+        if isinstance(world, Polygon):
+            pieces_world.append(world)
+        else:
+            pieces_world.extend([g for g in getattr(world, 'geoms', []) if isinstance(g, Polygon)])
+    if len(pieces_world) < 2:
+        return [poly]
+
+    out: List[Polygon] = []
+    for idx, piece in enumerate(sorted(pieces_world, key=lambda p: float(p.area), reverse=True)):
+        pw, ph = _bbox_dims(piece)
+        if piece.area < 120.0 or min(pw, ph) < min(min_frontage_m, min_depth_m) * 0.55:
+            continue
+        out.extend(
+            _recursive_split_polygon(
+                piece,
+                target_area_m2=target_area_m2,
+                min_frontage_m=min_frontage_m,
+                min_depth_m=min_depth_m,
+                rng_seed=rng_seed + idx * 17 + depth * 101,
+                curvilinear_split_bias=curvilinear_split_bias,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+        )
+    return out or [poly]
+
+
+def _road_network_local_context(road_network: object | None):
+    if road_network is None:
+        return {"local_cul_endpoints": [], "local_lines": [], "collector_lines": []}
+    node_lookup = {getattr(n, "id"): n for n in getattr(road_network, "nodes", [])}
+    local_cul_endpoints = []
+    local_lines = []
+    collector_lines = []
+    for e in getattr(road_network, "edges", []):
+        rc = str(getattr(e, "road_class", ""))
+        path = getattr(e, "path_points", None)
+        coords = []
+        if path and len(path) >= 2:
+            coords = [(float(p.x if hasattr(p, "x") else p["x"]), float(p.y if hasattr(p, "y") else p["y"])) for p in path]
+        else:
+            u = node_lookup.get(getattr(e, "u"))
+            v = node_lookup.get(getattr(e, "v"))
+            if u is not None and v is not None and hasattr(u, "x") and hasattr(v, "x"):
+                coords = [(float(u.x), float(u.y)), (float(v.x), float(v.y))]
+            elif u is not None and hasattr(u, "pos") and v is not None and hasattr(v, "pos"):
+                coords = [(float(u.pos.x), float(u.pos.y)), (float(v.pos.x), float(v.pos.y))]
+        if len(coords) < 2:
+            continue
+        line = LineString(coords)
+        if line.length <= 1e-6:
+            continue
+        if rc == "local":
+            local_lines.append(line)
+            if "-cul" in str(getattr(e, "id", "")):
+                local_cul_endpoints.append(line.coords[0])
+                local_cul_endpoints.append(line.coords[-1])
+        elif rc == "collector":
+            collector_lines.append(line)
+    return {
+        "local_cul_endpoints": local_cul_endpoints,
+        "local_lines": local_lines,
+        "collector_lines": collector_lines,
+    }
+
+
+def generate_frontage_parcels(
+    macro_blocks: Sequence[Polygon],
+    road_network: object | None = None,
+    river_areas: Sequence[object] | None = None,
+    pedestrian_width_m: float = 3.0,
+    config: FrontageParcelConfig | None = None,
+) -> ParcelizationResult:
+    _ = river_areas
+    cfg = config or FrontageParcelConfig()
+    local_ctx = _road_network_local_context(road_network)
+
+    base = generate_pedestrian_paths_and_parcels(
+        macro_blocks=macro_blocks,
+        pedestrian_width_m=pedestrian_width_m,
+    )
+    refined_by_block: List[List[Polygon]] = []
+    for block_idx, base_parcels in enumerate(base.parcel_polygons_by_block):
+        block = macro_blocks[block_idx] if block_idx < len(macro_blocks) else None
+        block_area = float(getattr(block, "area", 0.0) or 0.0)
+        target_area = float(cfg.mixed_target_area_m2 if block_area >= 40_000.0 else cfg.residential_target_area_m2)
+        block_frontage = float(cfg.min_frontage_m)
+        block_depth = float(cfg.min_depth_m)
+        block_curvy_bias = 0.0
+        if bool(getattr(cfg, "parcel_local_morphology_coupling", True)) and block is not None:
+            centroid = block.representative_point()
+            cx, cy = float(centroid.x), float(centroid.y)
+            cul_pts = local_ctx.get("local_cul_endpoints", [])
+            local_lines = local_ctx.get("local_lines", [])
+            collector_lines = local_ctx.get("collector_lines", [])
+            if cul_pts:
+                d_cul = min((((cx - px) ** 2 + (cy - py) ** 2) ** 0.5) for px, py in cul_pts)
+                if d_cul < 140.0:
+                    relax = float(max(0.0, min(0.8, cfg.parcel_culdesac_frontage_relaxation)))
+                    block_frontage *= (1.0 - 0.35 * relax)
+                    block_depth *= (1.0 - 0.20 * relax)
+                    target_area *= (1.0 + 0.28 * relax)
+                    block_curvy_bias = max(block_curvy_bias, 0.25 + 0.5 * relax)
+            if local_lines:
+                pt = centroid
+                d_local = min(float(line.distance(pt)) for line in local_lines)
+                if d_local < 90.0:
+                    depth_bias = float(max(-0.5, min(1.0, cfg.parcel_local_depth_bias)))
+                    block_depth *= (1.0 - 0.18 * depth_bias)
+                    block_curvy_bias = max(block_curvy_bias, 0.15)
+            if collector_lines:
+                pt = centroid
+                d_col = min(float(line.distance(pt)) for line in collector_lines)
+                if d_col < 70.0:
+                    target_area *= 1.08
+            block_curvy_bias = max(block_curvy_bias, float(max(0.0, min(1.0, cfg.parcel_curvilinear_split_bias))) * block_curvy_bias)
+        refined: List[Polygon] = []
+        for parcel_idx, poly in enumerate(base_parcels):
+            splits = _recursive_split_polygon(
+                poly,
+                target_area_m2=target_area,
+                min_frontage_m=block_frontage,
+                min_depth_m=block_depth,
+                rng_seed=int(cfg.seed + block_idx * 1009 + parcel_idx * 97),
+                curvilinear_split_bias=block_curvy_bias,
+            )
+            for piece in splits:
+                if piece.area < 180.0:
+                    continue
+                w, h = _bbox_dims(piece)
+                if min(w, h) < min(block_frontage, block_depth) * 0.5:
+                    continue
+                refined.append(piece)
+        refined_by_block.append(refined or list(base_parcels))
+
+    return ParcelizationResult(
+        pedestrian_paths=list(base.pedestrian_paths),
+        pedestrian_corridors_by_block=list(base.pedestrian_corridors_by_block),
+        parcel_polygons_by_block=refined_by_block,
     )

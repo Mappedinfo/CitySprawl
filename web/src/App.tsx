@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchHealth, fetchPresets, generateCity, generateCityStaged } from './api/client';
+import { fetchHealth, fetchPresets, generateCity, generateCityStaged, generateCityV2 } from './api/client';
 import { drawStageScene, type LayerToggles } from './render/stageRenderer';
 import { heightGridToImageData } from './render/terrainImage';
 import { clampScale, screenToWorld, worldToScreen, type Viewport } from './render/viewport';
@@ -20,17 +20,47 @@ const defaultConfig: GenerateConfig = {
   seed: 42,
   extent_m: 10000,
   grid_resolution: 256,
+  quality: { profile: 'balanced', time_budget_ms: 15000 },
   terrain: { noise_octaves: 5, relief_strength: 1 },
-  hydrology: { enable: true, accum_threshold: 0.015, min_river_length_m: 1000 },
+  hydrology: {
+    enable: true,
+    accum_threshold: 0.015,
+    min_river_length_m: 1000,
+    primary_branch_count_max: 4,
+    centerline_smooth_iters: 2,
+    width_taper_strength: 0.35,
+    bank_irregularity: 0.08,
+  },
   hubs: { t1_count: 1, t2_count: 4, t3_count: 20, min_distance_m: 600 },
-  roads: { k_neighbors: 4, loop_budget: 3, branch_steps: 2, slope_penalty: 2, river_cross_penalty: 300 },
+  roads: {
+    k_neighbors: 4,
+    loop_budget: 3,
+    branch_steps: 2,
+    slope_penalty: 2,
+    river_cross_penalty: 300,
+    style: 'mixed_organic',
+    collector_spacing_m: 420,
+    local_spacing_m: 130,
+    collector_jitter: 0.16,
+    local_jitter: 0.22,
+    river_setback_m: 18,
+    minor_bridge_budget: 4,
+    max_local_block_area_m2: 180000,
+  },
+  parcels: {
+    enable: true,
+    residential_target_area_m2: 1800,
+    mixed_target_area_m2: 2600,
+    min_frontage_m: 10,
+    min_depth_m: 12,
+  },
   naming: { provider: 'mock' },
 };
 
 const TIMELINE_TOTAL_MS = 20_000;
 const USE_THREE_TERRAIN = true;
 
-type StageSource = 'none' | 'staged' | 'fallback';
+type StageSource = 'none' | 'v2' | 'staged' | 'fallback';
 
 type LayerState = LayerToggles;
 
@@ -140,6 +170,8 @@ export default function App() {
     terrain: true,
     rivers: true,
     roads: true,
+    majorRoads: true,
+    localRoads: true,
     contours: true,
     blocks: true,
     parcels: true,
@@ -292,17 +324,32 @@ export default function App() {
     try {
       let nextResponse: StagedCityResponse | null = null;
       try {
-        const staged = await generateCityStaged(config);
-        nextResponse = staged;
-        setResponse(staged);
-        setSource('staged');
-      } catch (stagedErr) {
-        const legacyArtifact = await generateCity(config);
-        const fallback = composeFallbackStagedResponse(legacyArtifact);
-        nextResponse = fallback;
-        setResponse(fallback);
-        setSource('fallback');
-        setError(`Staged API unavailable. Using local fallback timeline. ${stagedErr instanceof Error ? stagedErr.message : ''}`.trim());
+        const v2 = await generateCityV2(config);
+        nextResponse = v2;
+        setResponse(v2);
+        setSource('v2');
+      } catch (v2Err) {
+        try {
+          const staged = await generateCityStaged(config);
+          staged.final_artifact.metrics.degraded_mode = true;
+          nextResponse = staged;
+          setResponse(staged);
+          setSource('staged');
+          setError(`V2 API unavailable. Using v1 staged endpoint. ${v2Err instanceof Error ? v2Err.message : ''}`.trim());
+        } catch (stagedErr) {
+          const legacyArtifact = await generateCity(config);
+          legacyArtifact.metrics.degraded_mode = true;
+          const fallback = composeFallbackStagedResponse(legacyArtifact);
+          fallback.final_artifact.metrics.degraded_mode = true;
+          nextResponse = fallback;
+          setResponse(fallback);
+          setSource('fallback');
+          setError(
+            `V2 + staged API unavailable. Using legacy fallback timeline. ${
+              stagedErr instanceof Error ? stagedErr.message : ''
+            }`.trim(),
+          );
+        }
       }
       const rect = wrapperRef.current?.getBoundingClientRect();
       if (nextResponse?.final_artifact && rect) {
@@ -346,12 +393,12 @@ export default function App() {
 
   const dragRef = useRef<{ active: boolean; x: number; y: number } | null>(null);
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { active: true, x: e.clientX, y: e.clientY };
   };
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag?.active) return;
     const dx = e.clientX - drag.x;
@@ -360,7 +407,7 @@ export default function App() {
     setViewport((prev) => ({ ...prev, panX: prev.panX + dx, panY: prev.panY + dy }));
   };
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (dragRef.current) dragRef.current.active = false;
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
@@ -386,11 +433,11 @@ export default function App() {
 
   // Attach wheel event with passive: false to allow preventDefault
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    wrapper.addEventListener('wheel', handleWheel, { passive: false });
     return () => {
-      canvas.removeEventListener('wheel', handleWheel);
+      wrapper.removeEventListener('wheel', handleWheel);
     };
   }, []);
 
@@ -448,15 +495,16 @@ export default function App() {
           {error ? <div className="error-banner">{error}</div> : null}
         </div>
 
-        <div ref={wrapperRef} className="canvas-stage hud-frame">
+        <div
+          ref={wrapperRef}
+          className="canvas-stage hud-frame"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        >
           <TerrainScene artifact={artifact} viewport={viewport} visible={USE_THREE_TERRAIN && layers.terrain && stageShowsTerrain} />
-          <canvas
-            ref={canvasRef}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
-          />
+          <canvas ref={canvasRef} />
 
           {artifact ? (
             <svg className="overlay" onClick={handleOverlayClick}>

@@ -2,6 +2,10 @@ export type GenerateConfig = {
   seed: number;
   extent_m: number;
   grid_resolution: number;
+  quality: {
+    profile: string;
+    time_budget_ms: number;
+  };
   terrain: {
     noise_octaves: number;
     relief_strength: number;
@@ -10,6 +14,10 @@ export type GenerateConfig = {
     enable: boolean;
     accum_threshold: number;
     min_river_length_m: number;
+    primary_branch_count_max: number;
+    centerline_smooth_iters: number;
+    width_taper_strength: number;
+    bank_irregularity: number;
   };
   hubs: {
     t1_count: number;
@@ -23,6 +31,59 @@ export type GenerateConfig = {
     branch_steps: number;
     slope_penalty: number;
     river_cross_penalty: number;
+    style: string;
+    collector_spacing_m: number;
+    local_spacing_m: number;
+    collector_jitter: number;
+    local_jitter: number;
+    local_generator?: string;
+    local_classic_probe_step_m?: number;
+    local_classic_seed_spacing_m?: number;
+    local_classic_max_trace_len_m?: number;
+    local_classic_min_trace_len_m?: number;
+    local_classic_turn_limit_deg?: number;
+    local_classic_branch_prob?: number;
+    local_classic_continue_prob?: number;
+    local_classic_culdesac_prob?: number;
+    local_classic_max_segments_per_block?: number;
+    local_community_seed_count_per_block?: number;
+    local_community_spine_prob?: number;
+    local_arterial_setback_weight?: number;
+    local_collector_follow_weight?: number;
+    river_setback_m: number;
+    minor_bridge_budget: number;
+    max_local_block_area_m2: number;
+    collector_generator?: string;
+    classic_probe_step_m?: number;
+    classic_seed_spacing_m?: number;
+    classic_max_trace_len_m?: number;
+    classic_min_trace_len_m?: number;
+    classic_turn_limit_deg?: number;
+    classic_branch_prob?: number;
+    classic_continue_prob?: number;
+    classic_culdesac_prob?: number;
+    classic_max_queue_size?: number;
+    classic_max_segments?: number;
+    slope_straight_threshold_deg?: number;
+    slope_serpentine_threshold_deg?: number;
+    slope_hard_limit_deg?: number;
+    contour_follow_weight?: number;
+    arterial_align_weight?: number;
+    hub_seek_weight?: number;
+    river_snap_dist_m?: number;
+    river_parallel_bias_weight?: number;
+    river_avoid_weight?: number;
+  };
+  parcels: {
+    enable: boolean;
+    residential_target_area_m2: number;
+    mixed_target_area_m2: number;
+    min_frontage_m: number;
+    min_depth_m: number;
+    parcel_local_morphology_coupling?: boolean;
+    parcel_culdesac_frontage_relaxation?: number;
+    parcel_local_depth_bias?: number;
+    parcel_curvilinear_split_bias?: number;
   };
   naming: {
     provider: string;
@@ -144,8 +205,14 @@ export type CityArtifact = {
     main_river_length_m: number;
     river_area_m2: number;
     river_area_clipped_ratio?: number | null;
+    river_mainstem_count?: number;
     visual_envelope_area_ratio?: number | null;
     avg_edge_weight: number;
+    road_edge_count_by_class?: Record<string, number>;
+    parcel_count?: number;
+    median_parcel_area_m2?: number;
+    generation_profile?: string;
+    degraded_mode?: boolean;
     notes: string[];
   };
   debug_layers: {

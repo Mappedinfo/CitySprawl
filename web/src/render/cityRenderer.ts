@@ -6,6 +6,9 @@ export type LayerFlags = {
   rivers: boolean;
   roads: boolean;
   debugCandidates: boolean;
+  showMajorRoads?: boolean;
+  showLocalRoads?: boolean;
+  showPedestrianRoads?: boolean;
   transparentBackground?: boolean;
   cssWidth?: number;
   cssHeight?: number;
@@ -24,10 +27,20 @@ export function worldMetersToPixels(meters: number, extent: number, cssWidth: nu
 export function roadStrokeWidthPx(edge: Pick<RoadEdgeRecord, 'road_class' | 'width_m'>, extent: number, cssWidth: number, viewportScale: number): number {
   const baseMeters =
     edge.width_m ??
-    (edge.road_class === 'arterial' ? 18 : edge.road_class === 'pedestrian' ? 3 : 8);
+    (edge.road_class === 'arterial'
+      ? 18
+      : edge.road_class === 'collector'
+        ? 11
+        : edge.road_class === 'pedestrian'
+          ? 3
+          : edge.road_class === 'service'
+            ? 4
+            : 8);
   const worldPx = worldMetersToPixels(baseMeters, extent, cssWidth, viewportScale);
   if (edge.road_class === 'arterial') return clamp(worldPx * 0.6, 1.2, 10);
+  if (edge.road_class === 'collector') return clamp(worldPx * 0.62, 1.0, 8);
   if (edge.road_class === 'pedestrian') return clamp(worldPx * 0.7, 0.5, 3);
+  if (edge.road_class === 'service') return clamp(worldPx * 0.6, 0.55, 3.4);
   return clamp(worldPx * 0.62, 0.8, 6);
 }
 
@@ -214,22 +227,36 @@ export function drawCity(
 
   if (layers.roads) {
     const nodeMap = new Map(artifact.roads.nodes.map((n) => [n.id, n]));
+    const showMajorRoads = layers.showMajorRoads ?? true;
+    const showLocalRoads = layers.showLocalRoads ?? true;
+    const showPedRoads = layers.showPedestrianRoads ?? true;
+    const lodHideLocal = viewport.scale < 1.35;
     const edges = [...artifact.roads.edges].sort((a, b) => {
       if ((a.render_order ?? 1) !== (b.render_order ?? 1)) return (a.render_order ?? 1) - (b.render_order ?? 1);
       return (b.width_m ?? 0) - (a.width_m ?? 0);
     });
     ctx.save();
     for (const edge of edges) {
+      const isMajor = edge.road_class === 'arterial' || edge.road_class === 'collector';
+      const isPed = edge.road_class === 'pedestrian';
+      const isLocal = !isMajor && !isPed;
+      if (isMajor && !showMajorRoads) continue;
+      if (isPed && !showPedRoads) continue;
+      if (isLocal && (!showLocalRoads || lodHideLocal)) continue;
       const u = nodeMap.get(edge.u);
       const v = nodeMap.get(edge.v);
       if (!u || !v) continue;
       const path = edge.path_points && edge.path_points.length >= 2 ? edge.path_points : null;
       if (edge.road_class === 'arterial') {
         ctx.strokeStyle = 'rgba(236, 246, 255, 0.98)';
+      } else if (edge.road_class === 'collector') {
+        ctx.strokeStyle = 'rgba(194, 238, 255, 0.88)';
       } else if (edge.road_class === 'pedestrian') {
         ctx.strokeStyle = 'rgba(122, 220, 255, 0.68)';
+      } else if (edge.road_class === 'service') {
+        ctx.strokeStyle = 'rgba(126, 198, 228, 0.58)';
       } else {
-        ctx.strokeStyle = 'rgba(143, 226, 255, 0.72)';
+        ctx.strokeStyle = 'rgba(136, 214, 245, 0.62)';
       }
       ctx.lineWidth = roadStrokeWidthPx(edge, extent, width, viewport.scale);
       ctx.beginPath();

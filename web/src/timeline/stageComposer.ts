@@ -107,9 +107,11 @@ function pseudoTraffic(artifact: CityArtifact): TrafficEdgeFlow[] {
   const wMax = Math.max(...weights, 1);
   return artifact.roads.edges.map((edge) => {
     const inv = 1 - (edge.weight - wMin) / Math.max(1e-6, wMax - wMin);
-    const base = edge.road_class === 'arterial' ? 150 : 45;
+    const base = edge.road_class === 'arterial' ? 150 : edge.road_class === 'collector' ? 90 : 45;
     const flow = Math.max(0, base * (0.3 + inv));
-    const capacity = (edge.road_class === 'arterial' ? 1100 : 420) * Math.max(0.6, Math.min(1.8, edge.length_m / 140));
+    const capacity =
+      (edge.road_class === 'arterial' ? 1100 : edge.road_class === 'collector' ? 700 : 420) *
+      Math.max(0.6, Math.min(1.8, edge.length_m / 140));
     return {
       edge_id: edge.id,
       flow,
@@ -176,6 +178,7 @@ function pseudoFlood(artifact: CityArtifact): number[][] | undefined {
 }
 
 export function composeFallbackStagedResponse(artifact: CityArtifact): StagedCityResponse {
+  artifact.metrics.degraded_mode = true;
   const suitability = normalizeGrid(artifact.debug_layers.suitability_preview);
   const flood = pseudoFlood(artifact);
   const population = pseudoPopulation(artifact);

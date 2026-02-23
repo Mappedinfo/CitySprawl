@@ -2,9 +2,39 @@
   "seed": 42,
   "extent_m": 2048,
   "grid_resolution": 256,
+  "quality": {"profile": "balanced", "time_budget_ms": 15000},
   "terrain": {"noise_octaves": 5, "relief_strength": 1.0},
-  "hydrology": {"enable": true, "accum_threshold": 0.015, "min_river_length_m": 120.0},
+  "hydrology": {
+    "enable": true,
+    "accum_threshold": 0.015,
+    "min_river_length_m": 120.0,
+    "primary_branch_count_max": 4,
+    "centerline_smooth_iters": 2,
+    "width_taper_strength": 0.35,
+    "bank_irregularity": 0.08
+  },
   "hubs": {"t1_count": 1, "t2_count": 4, "t3_count": 20, "min_distance_m": 120.0},
-  "roads": {"k_neighbors": 4, "loop_budget": 3, "branch_steps": 2, "slope_penalty": 2.0, "river_cross_penalty": 300.0},
+  "roads": {
+    "k_neighbors": 4,
+    "loop_budget": 3,
+    "branch_steps": 2,
+    "slope_penalty": 2.0,
+    "river_cross_penalty": 300.0,
+    "style": "mixed_organic",
+    "collector_spacing_m": 420.0,
+    "local_spacing_m": 130.0,
+    "collector_jitter": 0.16,
+    "local_jitter": 0.22,
+    "river_setback_m": 18.0,
+    "minor_bridge_budget": 4,
+    "max_local_block_area_m2": 180000.0
+  },
+  "parcels": {
+    "enable": true,
+    "residential_target_area_m2": 1800.0,
+    "mixed_target_area_m2": 2600.0,
+    "min_frontage_m": 10.0,
+    "min_depth_m": 12.0
+  },
   "naming": {"provider": "mock"}
 }

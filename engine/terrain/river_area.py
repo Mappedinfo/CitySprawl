@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import hypot, log
+from math import hypot, log, sin, tau
 from typing import Dict, List, Sequence, Tuple
 
 from shapely.geometry import LineString, MultiPolygon, Polygon, box
@@ -73,6 +73,113 @@ def _width_for_flow(flow: float, is_main: bool, width_scale: float = 1.0) -> flo
     return float(max(3.0, width * max(width_scale, 0.05)))
 
 
+def _polyline_length(points: Sequence[Tuple[float, float]]) -> float:
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for i in range(len(points) - 1):
+        x0, y0 = points[i]
+        x1, y1 = points[i + 1]
+        total += hypot(x1 - x0, y1 - y0)
+    return float(total)
+
+
+def _resample_polyline(points: Sequence[Tuple[float, float]], step_m: float = 35.0) -> List[Tuple[float, float]]:
+    if len(points) < 2:
+        return list(points)
+    if step_m <= 1.0:
+        step_m = 1.0
+    out: List[Tuple[float, float]] = [tuple(points[0])]
+    for i in range(len(points) - 1):
+        x0, y0 = points[i]
+        x1, y1 = points[i + 1]
+        seg_len = hypot(x1 - x0, y1 - y0)
+        if seg_len <= 1e-6:
+            continue
+        n = max(1, int(seg_len / step_m))
+        for j in range(1, n + 1):
+            t = j / float(n)
+            out.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
+    # Drop immediate duplicates.
+    cleaned: List[Tuple[float, float]] = []
+    for p in out:
+        if not cleaned or hypot(p[0] - cleaned[-1][0], p[1] - cleaned[-1][1]) > 1e-6:
+            cleaned.append(p)
+    return cleaned
+
+
+def _chaikin(points: Sequence[Tuple[float, float]], iters: int) -> List[Tuple[float, float]]:
+    out = list(points)
+    for _ in range(max(0, int(iters))):
+        if len(out) < 3:
+            break
+        nxt = [out[0]]
+        for i in range(len(out) - 1):
+            x0, y0 = out[i]
+            x1, y1 = out[i + 1]
+            q = (0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1)
+            r = (0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1)
+            nxt.extend([q, r])
+        nxt.append(out[-1])
+        out = nxt
+    return out
+
+
+def _width_profile_factor(
+    t: float,
+    *,
+    taper_strength: float,
+    bank_irregularity: float,
+    phase: float,
+) -> float:
+    t_clamped = max(0.0, min(1.0, float(t)))
+    center_boost = 1.0 - float(taper_strength) * min(1.0, abs(t_clamped - 0.5) / 0.5)
+    wobble = 1.0 + float(bank_irregularity) * 0.35 * sin(phase + t_clamped * tau * 1.7)
+    return max(0.35, center_boost * wobble)
+
+
+def _segmentized_river_geom(
+    points: Sequence[Tuple[float, float]],
+    *,
+    flow: float,
+    is_main: bool,
+    width_scale: float,
+    taper_strength: float,
+    bank_irregularity: float,
+    phase: float,
+):
+    if len(points) < 2:
+        return Polygon(), 0.0
+    base_width = _width_for_flow(flow, is_main, width_scale=width_scale)
+    geoms = []
+    widths: List[float] = []
+    n = len(points)
+    for i in range(n - 1):
+        t0 = i / float(max(n - 1, 1))
+        t1 = (i + 1) / float(max(n - 1, 1))
+        w0 = base_width * _width_profile_factor(
+            t0,
+            taper_strength=taper_strength,
+            bank_irregularity=bank_irregularity,
+            phase=phase,
+        )
+        w1 = base_width * _width_profile_factor(
+            t1,
+            taper_strength=taper_strength,
+            bank_irregularity=bank_irregularity,
+            phase=phase,
+        )
+        widths.extend([w0, w1])
+        seg = LineString([points[i], points[i + 1]])
+        if seg.is_empty or seg.length <= 1e-6:
+            continue
+        seg_width = max(2.0, (w0 + w1) * 0.5)
+        geoms.append(seg.buffer(seg_width / 2.0, cap_style=1, join_style=1, resolution=6))
+    if not geoms:
+        return Polygon(), 0.0
+    return unary_union(geoms), (float(sum(widths)) / len(widths) if widths else float(base_width))
+
+
 def _polygon_to_model(
     poly: Polygon,
     idx: int,
@@ -99,6 +206,9 @@ def build_river_area_polygons(
     width_scale: float = 1.0,
     clip_extent_m: float | None = None,
     min_area_m2: float = 1.0,
+    centerline_smooth_iters: int = 0,
+    width_taper_strength: float = 0.0,
+    bank_irregularity: float = 0.0,
     return_meta: bool = False,
 ) -> Tuple[List[Dict[str, object]], List[RiverAreaPolygon]] | Tuple[List[Dict[str, object]], List[RiverAreaPolygon], Dict[str, float]]:
     selected = select_primary_rivers(river_polylines, max_branches=max_branches)
@@ -109,10 +219,23 @@ def build_river_area_polygons(
 
     buffers = []
     sources = []
-    for item in selected:
+    for idx, item in enumerate(selected):
+        pts = _resample_polyline(item['points'], step_m=35.0)
+        if centerline_smooth_iters > 0:
+            pts = _chaikin(pts, centerline_smooth_iters)
+        if len(pts) >= 2:
+            item['points'] = pts
+            item['length_m'] = _polyline_length(pts)
         line = LineString(item['points'])
-        width_m = _width_for_flow(float(item['flow']), bool(item.get('is_main_stem', False)), width_scale=width_scale)
-        geom = line.buffer(width_m / 2.0, cap_style=1, join_style=1, resolution=8)
+        geom, width_m = _segmentized_river_geom(
+            item['points'],
+            flow=float(item['flow']),
+            is_main=bool(item.get('is_main_stem', False)),
+            width_scale=width_scale,
+            taper_strength=float(width_taper_strength),
+            bank_irregularity=float(bank_irregularity),
+            phase=float(idx) * 0.77 + (0.13 if bool(item.get('is_main_stem', False)) else 0.29),
+        )
         if geom.is_empty:
             continue
         buffers.append(geom)

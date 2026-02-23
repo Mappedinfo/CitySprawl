@@ -8,6 +8,8 @@ export type LayerToggles = {
   terrain: boolean;
   rivers: boolean;
   roads: boolean;
+  majorRoads: boolean;
+  localRoads: boolean;
   contours: boolean;
   blocks: boolean;
   parcels: boolean;
@@ -345,6 +347,8 @@ export function drawStageScene({
       rivers: false,
       roads: false,
       debugCandidates: false,
+      showMajorRoads: layers.majorRoads,
+      showLocalRoads: layers.localRoads,
       cssWidth,
       cssHeight,
     });
@@ -356,6 +360,8 @@ export function drawStageScene({
     rivers: layers.rivers && (!stage || hasStageLayer(stage, 'rivers') || hasStageLayer(stage, 'river_areas')),
     roads: layers.roads && (!stage || hasStageLayer(stage, 'roads')) && stage?.stage_id !== 'final_preview',
     debugCandidates: layers.debugCandidates && stage?.stage_id === 'infrastructure',
+    showMajorRoads: layers.majorRoads,
+    showLocalRoads: layers.localRoads,
     transparentBackground,
     cssWidth,
     cssHeight,
@@ -399,6 +405,8 @@ export function drawStageScene({
         rivers: false,
         roads: true,
         debugCandidates: false,
+        showMajorRoads: layers.majorRoads,
+        showLocalRoads: layers.localRoads,
         transparentBackground: true,
         preserveCanvas: true,
         cssWidth,

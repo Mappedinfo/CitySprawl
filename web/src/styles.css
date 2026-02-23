@@ -231,6 +231,10 @@ button:disabled {
   color: var(--accent);
 }
 
+.mode-v2 {
+  color: rgba(124, 255, 188, 0.95);
+}
+
 .mode-fallback {
   color: var(--accent-2);
 }
@@ -276,6 +280,12 @@ button:disabled {
   border-radius: 16px;
   overflow: hidden;
   background: rgba(6, 10, 18, 0.86);
+  touch-action: none;
+  cursor: grab;
+}
+
+.canvas-stage:active {
+  cursor: grabbing;
 }
 
 .canvas-stage::before,
@@ -326,8 +336,13 @@ button:disabled {
 }
 
 .canvas-stage .overlay {
-  pointer-events: auto;
+  pointer-events: none;
   z-index: 2;
+}
+
+.canvas-stage .overlay g {
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .hub-label {
@@ -564,6 +579,10 @@ button:disabled {
 
 .source-staged {
   color: var(--accent);
+}
+
+.source-v2 {
+  color: rgba(124, 255, 188, 0.95);
 }
 
 .source-fallback {

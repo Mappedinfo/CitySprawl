@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
@@ -15,8 +16,10 @@ from engine.analysis import (
     generate_resource_sites,
 )
 from engine.blocks import (
+    FrontageParcelConfig,
     classify_blocks_and_parcels,
     extract_macro_blocks,
+    generate_frontage_parcels,
     generate_pedestrian_paths_and_parcels,
 )
 from engine.blocks.extraction import river_union_geometry
@@ -72,6 +75,19 @@ class _CoreGenerationContext:
     river_area_m2: float
     main_river_length_m: float
     river_area_clipped_ratio: float
+
+
+@dataclass
+class _AnalysisAndLandLayers:
+    analysis: Any
+    resource_sites: List[Any]
+    population_potential: np.ndarray
+    traffic_result: Any
+    building_footprints: List[Any]
+    green_zones_preview: np.ndarray
+    pedestrian_paths: List[PedestrianPath]
+    land_blocks: List[LandBlock]
+    parcel_lots: List[ParcelLot]
 
 
 def _grid_to_nested_list(grid: np.ndarray, precision: int = 4) -> List[List[float]]:
@@ -173,10 +189,13 @@ def _build_adaptive_rivers(config: GenerateConfig, terrain_bundle: Any) -> Tuple
     hydrology = terrain_bundle.hydrology
     selected_rivers_raw, river_areas, river_meta = build_river_area_polygons(
         hydrology.river_polylines,
-        max_branches=2,
+        max_branches=int(getattr(config.hydrology, "primary_branch_count_max", 2)),
         width_scale=width_scale,
         clip_extent_m=float(config.extent_m),
         min_area_m2=5_000.0,
+        centerline_smooth_iters=int(getattr(config.hydrology, "centerline_smooth_iters", 0)),
+        width_taper_strength=float(getattr(config.hydrology, "width_taper_strength", 0.0)),
+        bank_irregularity=float(getattr(config.hydrology, "bank_irregularity", 0.0)),
         return_meta=True,
     )
     coverage, river_area_m2, main_len = _river_area_stats(config.extent_m, selected_rivers_raw, river_areas)
@@ -218,10 +237,13 @@ def _build_adaptive_rivers(config: GenerateConfig, terrain_bundle: Any) -> Tuple
                 terrain_bundle.hydrology = hydrology
         selected_rivers_raw, river_areas, river_meta = build_river_area_polygons(
             hydrology.river_polylines,
-            max_branches=2,
+            max_branches=int(getattr(config.hydrology, "primary_branch_count_max", 2)),
             width_scale=width_scale,
             clip_extent_m=float(config.extent_m),
             min_area_m2=5_000.0,
+            centerline_smooth_iters=int(getattr(config.hydrology, "centerline_smooth_iters", 0)),
+            width_taper_strength=float(getattr(config.hydrology, "width_taper_strength", 0.0)),
+            bank_irregularity=float(getattr(config.hydrology, "bank_irregularity", 0.0)),
             return_meta=True,
         )
         coverage, river_area_m2, main_len = _river_area_stats(config.extent_m, selected_rivers_raw, river_areas)
@@ -259,17 +281,97 @@ def _generate_core_context(config: GenerateConfig) -> _CoreGenerationContext:
         min_distance_m=config.hubs.min_distance_m,
     )
 
+    roads_cfg = config.roads
+    collector_generator_value = str(getattr(roads_cfg, "collector_generator", "classic_turtle"))
+    # Legacy compatibility: map legacy tensor collector parameters onto the classic collector generator
+    # when callers still request the deprecated backend name.
+    classic_probe_step_m = float(getattr(roads_cfg, "classic_probe_step_m", 24.0))
+    classic_seed_spacing_m = float(getattr(roads_cfg, "classic_seed_spacing_m", 260.0))
+    classic_max_trace_len_m = float(getattr(roads_cfg, "classic_max_trace_len_m", 1800.0))
+    classic_min_trace_len_m = float(getattr(roads_cfg, "classic_min_trace_len_m", 120.0))
+    classic_turn_limit_deg = float(getattr(roads_cfg, "classic_turn_limit_deg", 38.0))
+    if collector_generator_value.lower() == "tensor_streamline":
+        classic_probe_step_m = float(getattr(roads_cfg, "tensor_step_m", classic_probe_step_m))
+        classic_seed_spacing_m = float(getattr(roads_cfg, "tensor_seed_spacing_m", classic_seed_spacing_m))
+        classic_max_trace_len_m = float(getattr(roads_cfg, "tensor_max_trace_len_m", classic_max_trace_len_m))
+        classic_min_trace_len_m = float(getattr(roads_cfg, "tensor_min_trace_len_m", classic_min_trace_len_m))
+        classic_turn_limit_deg = float(getattr(roads_cfg, "tensor_turn_limit_deg", classic_turn_limit_deg))
+
     road_result = generate_roads(
         hubs=hub_result.hubs,
         extent_m=config.extent_m,
+        height=terrain_bundle.height,
         slope=terrain_bundle.slope,
         river_mask=terrain_bundle.hydrology.river_mask,
-        k_neighbors=config.roads.k_neighbors,
-        loop_budget=config.roads.loop_budget,
-        branch_steps=config.roads.branch_steps,
-        slope_penalty=config.roads.slope_penalty,
-        river_cross_penalty=config.roads.river_cross_penalty,
+        k_neighbors=roads_cfg.k_neighbors,
+        loop_budget=roads_cfg.loop_budget,
+        branch_steps=roads_cfg.branch_steps,
+        slope_penalty=roads_cfg.slope_penalty,
+        river_cross_penalty=roads_cfg.river_cross_penalty,
         seed=config.seed,
+        road_style=roads_cfg.style,
+        collector_spacing_m=roads_cfg.collector_spacing_m,
+        local_spacing_m=roads_cfg.local_spacing_m,
+        collector_jitter=roads_cfg.collector_jitter,
+        local_jitter=roads_cfg.local_jitter,
+        local_generator=roads_cfg.local_generator,
+        local_classic_probe_step_m=roads_cfg.local_classic_probe_step_m,
+        local_classic_seed_spacing_m=roads_cfg.local_classic_seed_spacing_m,
+        local_classic_max_trace_len_m=roads_cfg.local_classic_max_trace_len_m,
+        local_classic_min_trace_len_m=roads_cfg.local_classic_min_trace_len_m,
+        local_classic_turn_limit_deg=roads_cfg.local_classic_turn_limit_deg,
+        local_classic_branch_prob=roads_cfg.local_classic_branch_prob,
+        local_classic_continue_prob=roads_cfg.local_classic_continue_prob,
+        local_classic_culdesac_prob=roads_cfg.local_classic_culdesac_prob,
+        local_classic_max_segments_per_block=roads_cfg.local_classic_max_segments_per_block,
+        local_community_seed_count_per_block=roads_cfg.local_community_seed_count_per_block,
+        local_community_spine_prob=roads_cfg.local_community_spine_prob,
+        local_arterial_setback_weight=roads_cfg.local_arterial_setback_weight,
+        local_collector_follow_weight=roads_cfg.local_collector_follow_weight,
+        river_setback_m=roads_cfg.river_setback_m,
+        minor_bridge_budget=roads_cfg.minor_bridge_budget,
+        max_local_block_area_m2=roads_cfg.max_local_block_area_m2,
+        collector_generator=collector_generator_value,
+        classic_probe_step_m=classic_probe_step_m,
+        classic_seed_spacing_m=classic_seed_spacing_m,
+        classic_max_trace_len_m=classic_max_trace_len_m,
+        classic_min_trace_len_m=classic_min_trace_len_m,
+        classic_turn_limit_deg=classic_turn_limit_deg,
+        classic_branch_prob=roads_cfg.classic_branch_prob,
+        classic_continue_prob=roads_cfg.classic_continue_prob,
+        classic_culdesac_prob=roads_cfg.classic_culdesac_prob,
+        classic_max_queue_size=roads_cfg.classic_max_queue_size,
+        classic_max_segments=roads_cfg.classic_max_segments,
+        slope_straight_threshold_deg=roads_cfg.slope_straight_threshold_deg,
+        slope_serpentine_threshold_deg=roads_cfg.slope_serpentine_threshold_deg,
+        slope_hard_limit_deg=roads_cfg.slope_hard_limit_deg,
+        contour_follow_weight=roads_cfg.contour_follow_weight,
+        arterial_align_weight=roads_cfg.arterial_align_weight,
+        hub_seek_weight=roads_cfg.hub_seek_weight,
+        river_snap_dist_m=roads_cfg.river_snap_dist_m,
+        river_parallel_bias_weight=roads_cfg.river_parallel_bias_weight,
+        river_avoid_weight=roads_cfg.river_avoid_weight,
+        tensor_grid_resolution=roads_cfg.tensor_grid_resolution,
+        tensor_step_m=roads_cfg.tensor_step_m,
+        tensor_seed_spacing_m=roads_cfg.tensor_seed_spacing_m,
+        tensor_max_trace_len_m=roads_cfg.tensor_max_trace_len_m,
+        tensor_min_trace_len_m=roads_cfg.tensor_min_trace_len_m,
+        tensor_turn_limit_deg=roads_cfg.tensor_turn_limit_deg,
+        tensor_water_tangent_weight=roads_cfg.tensor_water_tangent_weight,
+        tensor_contour_tangent_weight=roads_cfg.tensor_contour_tangent_weight,
+        tensor_arterial_align_weight=roads_cfg.tensor_arterial_align_weight,
+        tensor_hub_attract_weight=roads_cfg.tensor_hub_attract_weight,
+        tensor_water_influence_m=roads_cfg.tensor_water_influence_m,
+        tensor_arterial_influence_m=roads_cfg.tensor_arterial_influence_m,
+        intersection_snap_radius_m=roads_cfg.intersection_snap_radius_m,
+        intersection_t_junction_radius_m=roads_cfg.intersection_t_junction_radius_m,
+        intersection_split_tolerance_m=roads_cfg.intersection_split_tolerance_m,
+        min_dangle_length_m=roads_cfg.min_dangle_length_m,
+        syntax_enable=roads_cfg.syntax_enable,
+        syntax_choice_radius_hops=roads_cfg.syntax_choice_radius_hops,
+        syntax_prune_low_choice_collectors=roads_cfg.syntax_prune_low_choice_collectors,
+        syntax_prune_quantile=roads_cfg.syntax_prune_quantile,
+        river_areas=river_areas,
     )
     terrain_visuals = compute_terrain_classification(
         height=terrain_bundle.height,
@@ -409,6 +511,50 @@ def _build_city_artifact_from_core(
     ]
     if ctx.river_area_clipped_ratio < 0.6:
         metric_notes.append("River buffer geometry was heavily clipped to study boundary.")
+    if float(metric_values.get("collector_generator_classic_turtle", 0.0)) > 0.5:
+        metric_notes.append("Collector generator: classic_turtle")
+    elif float(metric_values.get("collector_generator_tensor_streamline", 0.0)) > 0.5:
+        metric_notes.append("Collector generator: classic_turtle")
+    elif float(metric_values.get("collector_generator_grid_clip", 0.0)) > 0.5:
+        metric_notes.append("Collector generator: grid_clip")
+    if float(metric_values.get("collector_generator_degraded", 0.0)) > 0.5:
+        metric_notes.append("Collector generator degraded to grid_clip")
+    trace_count = int(
+        metric_values.get(
+            "collector_classic_trace_count",
+            metric_values.get("collector_tensor_trace_count", 0.0),
+        )
+    )
+    if trace_count > 0:
+        metric_notes.append(f"Classic collector traces: {trace_count}")
+    riverfront_seed_count = int(metric_values.get("collector_classic_riverfront_seed_count", 0.0))
+    riverfront_trace_count = int(metric_values.get("collector_classic_riverfront_trace_count", 0.0))
+    if riverfront_seed_count > 0:
+        metric_notes.append(f"Classic collector riverfront seeds: {riverfront_seed_count}")
+    if riverfront_trace_count > 0:
+        metric_notes.append(f"Classic collector riverfront traces: {riverfront_trace_count}")
+    arterial_t_attach_count = int(metric_values.get("collector_classic_arterial_t_attach_count", 0.0))
+    fallback_attach_count = int(metric_values.get("collector_classic_network_attach_fallback_count", 0.0))
+    if arterial_t_attach_count > 0 or fallback_attach_count > 0:
+        metric_notes.append(
+            f"Classic collector attachments: arterial_t={arterial_t_attach_count}, fallback={fallback_attach_count}"
+        )
+    local_trace_count = int(metric_values.get("local_classic_trace_count", 0.0))
+    if float(metric_values.get("local_generator_classic_sprawl", 0.0)) > 0.5:
+        metric_notes.append("Local generator: classic_sprawl")
+    elif float(metric_values.get("local_generator_grid_clip", 0.0)) > 0.5:
+        metric_notes.append("Local generator: grid_clip")
+    if local_trace_count > 0:
+        metric_notes.append(f"Classic local fill traces: {local_trace_count}")
+    local_cul_final = int(metric_values.get("local_culdesac_edge_count_final", 0.0))
+    local_cul_pre = int(metric_values.get("local_culdesac_edge_count_pre_topology", 0.0))
+    if local_cul_pre > 0 or local_cul_final > 0:
+        metric_notes.append(
+            f"Local cul-de-sac preservation: {local_cul_final}/{max(local_cul_pre, 1)} "
+            f"(ratio={float(metric_values.get('local_culdesac_preserved_ratio', 0.0)):.2f})"
+        )
+    if float(metric_values.get("syntax_enabled", 0.0)) > 0.5:
+        metric_notes.append(f"Space syntax postprocess enabled (pruned={int(metric_values.get('syntax_pruned_count', 0.0))})")
 
     metrics = Metrics(
         hub_count=len(hubs),
@@ -426,8 +572,31 @@ def _build_city_artifact_from_core(
         main_river_length_m=float(ctx.main_river_length_m),
         river_area_m2=float(ctx.river_area_m2),
         river_area_clipped_ratio=float(ctx.river_area_clipped_ratio),
+        river_mainstem_count=int(sum(1 for r in ctx.river_areas if bool(getattr(r, "is_main_stem", False)))),
         visual_envelope_area_ratio=float(visual_envelope_area_ratio),
         avg_edge_weight=float(metric_values.get("avg_edge_weight", 0.0)),
+        road_edge_count_by_class={k: int(v) for k, v in Counter(e.road_class for e in road_edges).items()},
+        parcel_count=0,
+        median_parcel_area_m2=0.0,
+        intersection_snap_to_node_count=int(metric_values.get("intersection_snap_to_node_count", 0.0)),
+        intersection_t_junction_count=int(metric_values.get("intersection_t_junction_count", 0.0)),
+        intersection_t_split_target_count=int(metric_values.get("intersection_t_split_target_count", 0.0)),
+        intersection_crossing_split_count=int(metric_values.get("intersection_crossing_split_count", 0.0)),
+        intersection_pruned_dangle_count=int(metric_values.get("intersection_pruned_dangle_count", 0.0)),
+        collector_classic_riverfront_seed_count=int(metric_values.get("collector_classic_riverfront_seed_count", 0.0)),
+        collector_classic_riverfront_trace_count=int(metric_values.get("collector_classic_riverfront_trace_count", 0.0)),
+        collector_classic_arterial_t_attach_count=int(metric_values.get("collector_classic_arterial_t_attach_count", 0.0)),
+        collector_classic_network_attach_fallback_count=int(
+            metric_values.get("collector_classic_network_attach_fallback_count", 0.0)
+        ),
+        collector_classic_failed_arterial_attach_count=int(
+            metric_values.get("collector_classic_failed_arterial_attach_count", 0.0)
+        ),
+        local_culdesac_edge_count_pre_topology=int(metric_values.get("local_culdesac_edge_count_pre_topology", 0.0)),
+        local_culdesac_edge_count_final=int(metric_values.get("local_culdesac_edge_count_final", 0.0)),
+        local_culdesac_preserved_ratio=float(metric_values.get("local_culdesac_preserved_ratio", 0.0)),
+        generation_profile=str(getattr(config.quality, "profile", "balanced")),
+        degraded_mode=False,
         notes=metric_notes,
     )
 
@@ -453,16 +622,36 @@ def _build_city_artifact_from_core(
 
 
 def _attach_land_use_layers(
+    config: GenerateConfig,
     artifact: CityArtifact,
     extent_m: float,
     resource_sites: Sequence[Any],
     flood_risk_preview: np.ndarray | None,
 ) -> Tuple[List[PedestrianPath], List[LandBlock], List[ParcelLot]]:
     extraction = extract_macro_blocks(extent_m, artifact.roads, artifact.river_areas)
-    parcelization = generate_pedestrian_paths_and_parcels(
-        extraction.macro_blocks,
-        pedestrian_width_m=PEDESTRIAN_WIDTH_M,
-    )
+    if bool(getattr(config.parcels, "enable", True)):
+        parcelization = generate_frontage_parcels(
+            extraction.macro_blocks,
+            road_network=artifact.roads,
+            river_areas=artifact.river_areas,
+            pedestrian_width_m=PEDESTRIAN_WIDTH_M,
+            config=FrontageParcelConfig(
+                residential_target_area_m2=float(getattr(config.parcels, "residential_target_area_m2", 1800.0)),
+                mixed_target_area_m2=float(getattr(config.parcels, "mixed_target_area_m2", 2600.0)),
+                min_frontage_m=float(getattr(config.parcels, "min_frontage_m", 10.0)),
+                min_depth_m=float(getattr(config.parcels, "min_depth_m", 12.0)),
+                parcel_local_morphology_coupling=bool(getattr(config.parcels, "parcel_local_morphology_coupling", True)),
+                parcel_culdesac_frontage_relaxation=float(getattr(config.parcels, "parcel_culdesac_frontage_relaxation", 0.18)),
+                parcel_local_depth_bias=float(getattr(config.parcels, "parcel_local_depth_bias", 0.10)),
+                parcel_curvilinear_split_bias=float(getattr(config.parcels, "parcel_curvilinear_split_bias", 0.20)),
+                seed=int(config.seed),
+            ),
+        )
+    else:
+        parcelization = generate_pedestrian_paths_and_parcels(
+            extraction.macro_blocks,
+            pedestrian_width_m=PEDESTRIAN_WIDTH_M,
+        )
     blocks, parcels = classify_blocks_and_parcels(
         extent_m=extent_m,
         extraction=extraction,
@@ -479,17 +668,30 @@ def _attach_land_use_layers(
     return artifact.pedestrian_paths, artifact.blocks, artifact.parcels
 
 
-def generate_city(config: GenerateConfig) -> CityArtifact:
-    t0 = perf_counter()
-    ctx = _generate_core_context(config)
-    duration_ms = (perf_counter() - t0) * 1000.0
-    return _build_city_artifact_from_core(config, ctx, duration_ms)
+def _refresh_final_metrics(
+    artifact: CityArtifact,
+    config: GenerateConfig,
+    *,
+    degraded_mode: bool = False,
+) -> None:
+    edge_counts = Counter(str(e.road_class) for e in artifact.roads.edges)
+    river_mainstem_count = int(sum(1 for r in (artifact.river_areas or []) if bool(getattr(r, "is_main_stem", False))))
+    parcel_areas = [float(p.area_m2) for p in (artifact.parcels or []) if float(getattr(p, "area_m2", 0.0)) > 0.0]
+    parcel_median = float(np.median(np.asarray(parcel_areas, dtype=np.float64))) if parcel_areas else 0.0
+
+    artifact.metrics.road_edge_count_by_class = {k: int(v) for k, v in edge_counts.items()}
+    artifact.metrics.parcel_count = int(len(artifact.parcels or []))
+    artifact.metrics.median_parcel_area_m2 = parcel_median
+    artifact.metrics.river_mainstem_count = river_mainstem_count
+    artifact.metrics.generation_profile = str(getattr(config.quality, "profile", "balanced"))
+    artifact.metrics.degraded_mode = bool(degraded_mode)
 
 
-def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
-    t0 = perf_counter()
-    ctx = _generate_core_context(config)
-
+def _build_analysis_and_land_layers(
+    config: GenerateConfig,
+    ctx: _CoreGenerationContext,
+    artifact: CityArtifact,
+) -> _AnalysisAndLandLayers:
     analysis = compute_suitability_and_flood(
         height=ctx.terrain_bundle.height,
         slope=ctx.terrain_bundle.slope,
@@ -513,13 +715,11 @@ def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
         extent_m=config.extent_m,
     )
 
-    final_artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
-    traffic_result = assign_edge_flows(final_artifact.hubs, final_artifact.roads)
-
+    traffic_result = assign_edge_flows(artifact.hubs, artifact.roads)
     building_footprints = generate_building_footprints(
         seed=config.seed,
         extent_m=config.extent_m,
-        hubs=final_artifact.hubs,
+        hubs=artifact.hubs,
         population_potential_preview=population_potential,
         flood_risk_preview=analysis.flood_risk,
     )
@@ -530,11 +730,43 @@ def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
     )
 
     pedestrian_paths, land_blocks, parcel_lots = _attach_land_use_layers(
-        final_artifact,
+        config,
+        artifact,
         extent_m=config.extent_m,
         resource_sites=resource_sites,
         flood_risk_preview=analysis.flood_risk,
     )
+    _refresh_final_metrics(artifact, config)
+
+    return _AnalysisAndLandLayers(
+        analysis=analysis,
+        resource_sites=list(resource_sites),
+        population_potential=population_potential,
+        traffic_result=traffic_result,
+        building_footprints=list(building_footprints),
+        green_zones_preview=green_zones_preview,
+        pedestrian_paths=list(pedestrian_paths),
+        land_blocks=list(land_blocks),
+        parcel_lots=list(parcel_lots),
+    )
+
+
+def generate_city(config: GenerateConfig) -> CityArtifact:
+    t0 = perf_counter()
+    ctx = _generate_core_context(config)
+    artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
+    _build_analysis_and_land_layers(config, ctx, artifact)
+    duration_ms = (perf_counter() - t0) * 1000.0
+    artifact.meta.duration_ms = float(duration_ms)
+    artifact.meta.generated_at_utc = datetime.now(timezone.utc).isoformat()
+    return artifact
+
+
+def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
+    t0 = perf_counter()
+    ctx = _generate_core_context(config)
+    final_artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
+    layers = _build_analysis_and_land_layers(config, ctx, final_artifact)
 
     duration_ms = (perf_counter() - t0) * 1000.0
     final_artifact.meta.duration_ms = float(duration_ms)
@@ -542,20 +774,20 @@ def generate_city_staged(config: GenerateConfig) -> StagedCityResponse:
 
     stages = build_stages(
         final_artifact=final_artifact,
-        suitability_preview=analysis.suitability,
-        flood_risk_preview=analysis.flood_risk,
-        population_potential_preview=population_potential,
-        resource_sites=resource_sites,
-        traffic_edge_flows=traffic_result.edge_flows,
-        building_footprints=building_footprints,
-        green_zones_preview=green_zones_preview,
+        suitability_preview=layers.analysis.suitability,
+        flood_risk_preview=layers.analysis.flood_risk,
+        population_potential_preview=layers.population_potential,
+        resource_sites=layers.resource_sites,
+        traffic_edge_flows=layers.traffic_result.edge_flows,
+        building_footprints=layers.building_footprints,
+        green_zones_preview=layers.green_zones_preview,
         terrain_class_preview=ctx.terrain_visuals.terrain_class_preview,
         hillshade_preview=ctx.terrain_visuals.hillshade_preview,
         contour_lines=ctx.contour_lines,
         river_area_polygons=final_artifact.river_areas,
-        pedestrian_paths=pedestrian_paths,
-        land_blocks=land_blocks,
-        parcel_lots=parcel_lots,
+        pedestrian_paths=layers.pedestrian_paths,
+        land_blocks=layers.land_blocks,
+        parcel_lots=layers.parcel_lots,
     )
     return StagedCityResponse(final_artifact=final_artifact, stages=stages)
 

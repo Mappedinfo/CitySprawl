@@ -18,6 +18,10 @@ class HydrologyConfig(StrictModel):
     enable: bool = True
     accum_threshold: float = Field(default=0.015, gt=0.0, lt=1.0)
     min_river_length_m: float = Field(default=1000.0, ge=0.0)
+    primary_branch_count_max: int = Field(default=4, ge=0, le=16)
+    centerline_smooth_iters: int = Field(default=2, ge=0, le=6)
+    width_taper_strength: float = Field(default=0.35, ge=0.0, le=1.0)
+    bank_irregularity: float = Field(default=0.08, ge=0.0, le=0.5)
 
 
 class HubsConfig(StrictModel):
@@ -33,6 +37,86 @@ class RoadsConfig(StrictModel):
     branch_steps: int = Field(default=2, ge=0, le=6)
     slope_penalty: float = Field(default=2.0, ge=0.0, le=50.0)
     river_cross_penalty: float = Field(default=300.0, ge=0.0, le=5000.0)
+    style: str = Field(default="mixed_organic", min_length=1)
+    collector_spacing_m: float = Field(default=420.0, gt=10.0, le=5000.0)
+    local_spacing_m: float = Field(default=130.0, gt=5.0, le=1000.0)
+    collector_jitter: float = Field(default=0.16, ge=0.0, le=1.0)
+    local_jitter: float = Field(default=0.22, ge=0.0, le=1.0)
+    local_generator: str = Field(default="classic_sprawl", min_length=1)
+    local_classic_probe_step_m: float = Field(default=18.0, gt=1.0, le=500.0)
+    local_classic_seed_spacing_m: float = Field(default=110.0, gt=5.0, le=5000.0)
+    local_classic_max_trace_len_m: float = Field(default=420.0, gt=10.0, le=50000.0)
+    local_classic_min_trace_len_m: float = Field(default=48.0, gt=1.0, le=5000.0)
+    local_classic_turn_limit_deg: float = Field(default=54.0, ge=1.0, le=180.0)
+    local_classic_branch_prob: float = Field(default=0.62, ge=0.0, le=1.0)
+    local_classic_continue_prob: float = Field(default=0.70, ge=0.0, le=1.0)
+    local_classic_culdesac_prob: float = Field(default=0.42, ge=0.0, le=1.0)
+    local_classic_max_segments_per_block: int = Field(default=28, ge=1, le=5000)
+    local_community_seed_count_per_block: int = Field(default=3, ge=1, le=32)
+    local_community_spine_prob: float = Field(default=0.28, ge=0.0, le=1.0)
+    local_arterial_setback_weight: float = Field(default=0.5, ge=0.0, le=5.0)
+    local_collector_follow_weight: float = Field(default=0.9, ge=0.0, le=5.0)
+    river_setback_m: float = Field(default=18.0, ge=0.0, le=500.0)
+    minor_bridge_budget: int = Field(default=4, ge=0, le=64)
+    max_local_block_area_m2: float = Field(default=180000.0, ge=100.0)
+    collector_generator: str = Field(default="classic_turtle", min_length=1)
+    classic_probe_step_m: float = Field(default=24.0, gt=1.0, le=500.0)
+    classic_seed_spacing_m: float = Field(default=260.0, gt=5.0, le=5000.0)
+    classic_max_trace_len_m: float = Field(default=1800.0, gt=10.0, le=50000.0)
+    classic_min_trace_len_m: float = Field(default=120.0, gt=1.0, le=5000.0)
+    classic_turn_limit_deg: float = Field(default=38.0, ge=1.0, le=180.0)
+    classic_branch_prob: float = Field(default=0.35, ge=0.0, le=1.0)
+    classic_continue_prob: float = Field(default=0.80, ge=0.0, le=1.0)
+    classic_culdesac_prob: float = Field(default=0.18, ge=0.0, le=1.0)
+    classic_max_queue_size: int = Field(default=2000, ge=10, le=100000)
+    classic_max_segments: int = Field(default=1200, ge=1, le=100000)
+    slope_straight_threshold_deg: float = Field(default=5.0, ge=0.0, le=89.0)
+    slope_serpentine_threshold_deg: float = Field(default=15.0, ge=0.0, le=89.0)
+    slope_hard_limit_deg: float = Field(default=22.0, ge=0.0, le=89.0)
+    contour_follow_weight: float = Field(default=0.9, ge=0.0, le=5.0)
+    arterial_align_weight: float = Field(default=0.6, ge=0.0, le=5.0)
+    hub_seek_weight: float = Field(default=0.25, ge=0.0, le=5.0)
+    river_snap_dist_m: float = Field(default=28.0, ge=0.0, le=500.0)
+    river_parallel_bias_weight: float = Field(default=1.0, ge=0.0, le=5.0)
+    river_avoid_weight: float = Field(default=1.2, ge=0.0, le=20.0)
+    # Deprecated compatibility fields for legacy tensor-streamline collector config.
+    tensor_grid_resolution: int = Field(default=96, ge=16, le=512)
+    tensor_step_m: float = Field(default=24.0, gt=1.0, le=500.0)
+    tensor_seed_spacing_m: float = Field(default=260.0, gt=5.0, le=5000.0)
+    tensor_max_trace_len_m: float = Field(default=1800.0, gt=10.0, le=50000.0)
+    tensor_min_trace_len_m: float = Field(default=120.0, gt=1.0, le=5000.0)
+    tensor_turn_limit_deg: float = Field(default=38.0, ge=1.0, le=180.0)
+    tensor_water_tangent_weight: float = Field(default=1.15, ge=0.0, le=20.0)
+    tensor_contour_tangent_weight: float = Field(default=0.95, ge=0.0, le=20.0)
+    tensor_arterial_align_weight: float = Field(default=0.70, ge=0.0, le=20.0)
+    tensor_hub_attract_weight: float = Field(default=0.35, ge=0.0, le=20.0)
+    tensor_water_influence_m: float = Field(default=320.0, gt=1.0, le=5000.0)
+    tensor_arterial_influence_m: float = Field(default=380.0, gt=1.0, le=5000.0)
+    intersection_snap_radius_m: float = Field(default=12.0, ge=0.0, le=500.0)
+    intersection_t_junction_radius_m: float = Field(default=18.0, ge=0.0, le=500.0)
+    intersection_split_tolerance_m: float = Field(default=1.5, ge=0.0, le=100.0)
+    min_dangle_length_m: float = Field(default=35.0, ge=0.0, le=1000.0)
+    syntax_enable: bool = True
+    syntax_choice_radius_hops: int = Field(default=10, ge=1, le=256)
+    syntax_prune_low_choice_collectors: bool = True
+    syntax_prune_quantile: float = Field(default=0.15, ge=0.0, le=0.99)
+
+
+class QualityConfig(StrictModel):
+    profile: str = Field(default="balanced", min_length=1)
+    time_budget_ms: int = Field(default=15000, ge=500, le=600000)
+
+
+class ParcelsConfig(StrictModel):
+    enable: bool = True
+    residential_target_area_m2: float = Field(default=1800.0, ge=50.0)
+    mixed_target_area_m2: float = Field(default=2600.0, ge=50.0)
+    min_frontage_m: float = Field(default=10.0, ge=1.0)
+    min_depth_m: float = Field(default=12.0, ge=1.0)
+    parcel_local_morphology_coupling: bool = True
+    parcel_culdesac_frontage_relaxation: float = Field(default=0.18, ge=0.0, le=0.8)
+    parcel_local_depth_bias: float = Field(default=0.10, ge=-0.5, le=1.0)
+    parcel_curvilinear_split_bias: float = Field(default=0.20, ge=0.0, le=1.0)
 
 
 class NamingConfig(StrictModel):
@@ -47,6 +131,8 @@ class GenerateConfig(StrictModel):
     hydrology: HydrologyConfig = Field(default_factory=HydrologyConfig)
     hubs: HubsConfig = Field(default_factory=HubsConfig)
     roads: RoadsConfig = Field(default_factory=RoadsConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
+    parcels: ParcelsConfig = Field(default_factory=ParcelsConfig)
     naming: NamingConfig = Field(default_factory=NamingConfig)
 
     @field_validator("seed")
@@ -205,8 +291,27 @@ class Metrics(StrictModel):
     main_river_length_m: float = 0.0
     river_area_m2: float = 0.0
     river_area_clipped_ratio: Optional[float] = None
+    river_mainstem_count: int = 0
     visual_envelope_area_ratio: Optional[float] = None
     avg_edge_weight: float
+    road_edge_count_by_class: Dict[str, int] = Field(default_factory=dict)
+    parcel_count: int = 0
+    median_parcel_area_m2: float = 0.0
+    intersection_snap_to_node_count: int = 0
+    intersection_t_junction_count: int = 0
+    intersection_t_split_target_count: int = 0
+    intersection_crossing_split_count: int = 0
+    intersection_pruned_dangle_count: int = 0
+    collector_classic_riverfront_seed_count: int = 0
+    collector_classic_riverfront_trace_count: int = 0
+    collector_classic_arterial_t_attach_count: int = 0
+    collector_classic_network_attach_fallback_count: int = 0
+    collector_classic_failed_arterial_attach_count: int = 0
+    local_culdesac_edge_count_pre_topology: int = 0
+    local_culdesac_edge_count_final: int = 0
+    local_culdesac_preserved_ratio: float = 0.0
+    generation_profile: str = "balanced"
+    degraded_mode: bool = False
     notes: List[str] = Field(default_factory=list)
 
 

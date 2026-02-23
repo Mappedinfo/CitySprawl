@@ -13,6 +13,8 @@ type Props = {
     terrain: boolean;
     rivers: boolean;
     roads: boolean;
+    majorRoads: boolean;
+    localRoads: boolean;
     contours: boolean;
     blocks: boolean;
     parcels: boolean;
@@ -32,6 +34,8 @@ const LAYER_LABELS: Record<string, string> = {
   terrain: 'Terrain',
   rivers: 'Rivers',
   roads: 'Roads',
+  majorRoads: 'Major Roads',
+  localRoads: 'Local Roads',
   contours: 'Contours',
   blocks: 'Blocks',
   parcels: 'Parcels',
@@ -144,6 +148,96 @@ export function Controls({
             max={12}
             onChange={(e) =>
               onConfigChange({ ...config, roads: { ...config.roads, loop_budget: Number(e.target.value) || 0 } })
+            }
+          />
+        </div>
+        <div>
+          <label>Quality</label>
+          <select
+            value={config.quality.profile}
+            onChange={(e) => {
+              const profile = e.target.value;
+              if (profile === 'preview') {
+                onConfigChange({
+                  ...config,
+                  quality: { ...config.quality, profile, time_budget_ms: 5000 },
+                  hydrology: { ...config.hydrology, primary_branch_count_max: 3 },
+                  roads: {
+                    ...config.roads,
+                    collector_spacing_m: 520,
+                    local_spacing_m: 170,
+                    minor_bridge_budget: 2,
+                  },
+                });
+                return;
+              }
+              if (profile === 'hq') {
+                onConfigChange({
+                  ...config,
+                  quality: { ...config.quality, profile, time_budget_ms: 60000 },
+                  hydrology: { ...config.hydrology, primary_branch_count_max: 5 },
+                  roads: {
+                    ...config.roads,
+                    collector_spacing_m: 320,
+                    local_spacing_m: 95,
+                    minor_bridge_budget: 8,
+                  },
+                });
+                return;
+              }
+              onConfigChange({
+                ...config,
+                quality: { ...config.quality, profile, time_budget_ms: 15000 },
+                hydrology: { ...config.hydrology, primary_branch_count_max: 4 },
+                roads: {
+                  ...config.roads,
+                  collector_spacing_m: 420,
+                  local_spacing_m: 130,
+                  minor_bridge_budget: 4,
+                },
+              });
+            }}
+          >
+            <option value="preview">preview</option>
+            <option value="balanced">balanced</option>
+            <option value="hq">hq</option>
+          </select>
+        </div>
+        <div>
+          <label>Road style</label>
+          <select
+            value={config.roads.style}
+            onChange={(e) => onConfigChange({ ...config, roads: { ...config.roads, style: e.target.value } })}
+          >
+            <option value="mixed_organic">mixed_organic</option>
+            <option value="grid">grid</option>
+            <option value="organic">organic</option>
+            <option value="skeleton">skeleton</option>
+          </select>
+        </div>
+        <div>
+          <label>Collector spacing</label>
+          <input
+            type="number"
+            value={config.roads.collector_spacing_m}
+            min={80}
+            max={1000}
+            step={10}
+            onChange={(e) =>
+              onConfigChange({ ...config, roads: { ...config.roads, collector_spacing_m: Number(e.target.value) || 420 } })
+            }
+          />
+        </div>
+        <div>
+          <label>Local spacing</label>
+          <input
+            type="number"
+            value={config.roads.local_spacing_m}
+            min={30}
+            max={400}
+            step={5}
+            onChange={(e) =>
+              onConfigChange({ ...config, roads: { ...config.roads, local_spacing_m: Number(e.target.value) || 130 } })
             }
           />
         </div>

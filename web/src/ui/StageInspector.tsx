@@ -1,6 +1,6 @@
 import type { StageArtifact } from '../types/city';
 
-export function StageInspector({ stage, source }: { stage: StageArtifact | null; source: 'staged' | 'fallback' | 'none' }) {
+export function StageInspector({ stage, source }: { stage: StageArtifact | null; source: 'v2' | 'staged' | 'fallback' | 'none' }) {
   return (
     <aside className="hud-panel stage-inspector">
       <div className="hud-title-row">

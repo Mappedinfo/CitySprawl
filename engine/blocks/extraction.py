@@ -54,7 +54,7 @@ def vehicular_corridor_union(road_network: RoadNetwork):
     node_lookup = {n.id: n for n in road_network.nodes}
     geoms = []
     for edge in road_network.edges:
-        if edge.road_class not in ('arterial', 'local'):
+        if edge.road_class not in ('arterial', 'collector', 'local'):
             continue
         coords = _edge_coords(edge, node_lookup)
         if coords is None:
