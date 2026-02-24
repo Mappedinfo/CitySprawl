@@ -81,3 +81,86 @@ def test_classic_local_fill_generates_curvy_locals_and_respects_setback():
     for tr in traces:
         for p in tr:
             assert not forbidden.contains(Point(p.x, p.y))
+
+
+def test_classic_local_fill_emits_trace_length_stats_and_hits_target_band_on_large_blocks():
+    nodes = [
+        BuiltRoadNode(id="a0", pos=Vec2(120.0, 220.0), kind="hub"),
+        BuiltRoadNode(id="a1", pos=Vec2(2080.0, 220.0), kind="hub"),
+        BuiltRoadNode(id="c0", pos=Vec2(220.0, 120.0), kind="hub"),
+        BuiltRoadNode(id="c1", pos=Vec2(220.0, 1880.0), kind="hub"),
+    ]
+    edges = [
+        BuiltRoadEdge(
+            id="art0",
+            u="a0",
+            v="a1",
+            road_class="arterial",
+            weight=1.0,
+            length_m=1960.0,
+            river_crossings=0,
+            width_m=18.0,
+            render_order=0,
+            path_points=[Vec2(120.0, 220.0), Vec2(2080.0, 220.0)],
+        ),
+        BuiltRoadEdge(
+            id="col0",
+            u="c0",
+            v="c1",
+            road_class="collector",
+            weight=1.0,
+            length_m=1760.0,
+            river_crossings=0,
+            width_m=11.0,
+            render_order=1,
+            path_points=[Vec2(220.0, 120.0), Vec2(220.0, 1880.0)],
+        ),
+    ]
+    blocks = [Polygon([(80.0, 80.0), (2120.0, 80.0), (2120.0, 1920.0), (80.0, 1920.0)])]
+    hubs = [HubPoint(id="h0", pos=Vec2(200.0, 200.0), tier=1, score=1.0, attrs={})]
+    height = np.zeros((128, 128), dtype=np.float64)
+    slope = np.ones((128, 128), dtype=np.float64) * 0.05
+    river_mask = np.zeros((128, 128), dtype=bool)
+    river_union = Polygon()
+
+    traces, cul_flags, _trace_meta, notes, numeric = generate_classic_local_fill(
+        extent_m=2200.0,
+        height=height,
+        slope=slope,
+        river_mask=river_mask,
+        river_areas=[],
+        river_union=river_union,
+        nodes=nodes,
+        edges=edges,
+        hubs=hubs,
+        blocks=blocks,
+        cfg=LocalClassicFillConfig(
+            local_spacing_m=130.0,
+            local_classic_probe_step_m=20.0,
+            local_classic_seed_spacing_m=120.0,
+            local_classic_min_trace_len_m=80.0,
+            local_classic_continue_prob=0.96,
+            local_classic_branch_prob=0.08,
+            local_classic_culdesac_prob=0.15,
+            local_classic_max_segments_per_block=10,
+            local_classic_max_road_distance_m=2500.0,
+            local_community_seed_count_per_block=2,
+        ),
+        seed=19,
+    )
+
+    lengths = []
+    for tr in traces:
+        total = 0.0
+        for i in range(len(tr) - 1):
+            total += tr[i].distance_to(tr[i + 1])
+        lengths.append(total)
+
+    assert len(traces) > 0
+    assert len(cul_flags) == len(traces)
+    assert any(n.startswith("local_classic_trace_len_m:") for n in notes)
+    assert "local_classic_trace_len_p50_m" in numeric
+    assert "local_classic_trace_target_band_rate" in numeric
+    assert numeric["local_classic_trace_len_p50_m"] >= 450.0
+    assert any(500.0 <= l <= 1000.0 for l in lengths)
+    assert numeric["local_classic_trace_target_band_rate"] > 0.0

@@ -36,6 +36,8 @@ class ClassicCollectorConfig:
     classic_culdesac_prob: float = 0.18
     classic_max_queue_size: int = 2000
     classic_max_segments: int = 1200
+    classic_max_arterial_distance_m: float = 800.0
+    classic_depth_decay_power: float = 1.5
     slope_straight_threshold_deg: float = 5.0
     slope_serpentine_threshold_deg: float = 15.0
     slope_hard_limit_deg: float = 22.0
@@ -562,7 +564,12 @@ class ClassicRoadGenerator:
     ) -> None:
         if depth >= 10:
             return
-        base_prob = float(self.cfg.classic_branch_prob)
+        # Depth-based probability decay: branches become less likely further
+        # from the originating arterial seed, preventing infinite sprawl.
+        max_depth = 10
+        decay_power = float(self.cfg.classic_depth_decay_power)
+        depth_decay = max(0.0, (1.0 - float(depth) / float(max_depth))) ** decay_power
+        base_prob = float(self.cfg.classic_branch_prob) * depth_decay
         if slope_deg > float(self.cfg.slope_serpentine_threshold_deg):
             base_prob *= 0.65
         elif slope_deg < float(self.cfg.slope_straight_threshold_deg):
@@ -678,6 +685,15 @@ class ClassicRoadGenerator:
                 d = alt_dir
                 nxt = alt_nxt
 
+            # Distance-from-arterial constraint: stop collector growth that
+            # wanders too far from the arterial network to prevent infinite sprawl.
+            max_art_dist = float(self.cfg.classic_max_arterial_distance_m)
+            if max_art_dist > 0.0 and self.arterial_segments:
+                d_art_sprawl, _ = self._nearest_arterial_probe(nxt)
+                if d_art_sprawl > max_art_dist:
+                    reason = "arterial_too_far"
+                    break
+
             new_seg = Segment(cur, nxt)
             # Self intersection (ignore adjacent segments).
             if len(points) >= 4:
@@ -755,6 +771,14 @@ class ClassicRoadGenerator:
                 cont_prob = float(self.cfg.classic_continue_prob)
                 if slope_deg > float(self.cfg.slope_serpentine_threshold_deg):
                     cont_prob *= 0.9
+                # Distance-based continue probability decay: roads far from
+                # arterials are more likely to terminate early.
+                max_art_dist = float(self.cfg.classic_max_arterial_distance_m)
+                if max_art_dist > 0.0 and self.arterial_segments:
+                    d_art_cont, _ = self._nearest_arterial_probe(cur)
+                    if d_art_cont > 0.5 * max_art_dist:
+                        ratio = min(1.0, d_art_cont / max_art_dist)
+                        cont_prob *= max(0.15, 1.0 - ratio)
                 if self.rng.random() > cont_prob:
                     culdesac = self.rng.random() < float(self.cfg.classic_culdesac_prob)
                     reason = "stochastic_stop"

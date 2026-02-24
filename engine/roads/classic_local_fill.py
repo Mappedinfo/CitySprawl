@@ -23,6 +23,13 @@ from engine.roads.terrain_probe import TerrainProbe, TerrainProbeConfig
 
 @dataclass
 class LocalClassicFillConfig:
+    local_spacing_m: float = 130.0
+    # Soft target for semantic local traces (not final topology-split edges).
+    local_trace_target_min_m: float = 500.0
+    local_trace_target_max_m: float = 1000.0
+    local_trace_soft_cap_m: float = 1200.0
+    local_trace_force_continue_until_min: bool = True
+    local_trace_exception_small_block_long_axis_m: float = 650.0
     local_classic_probe_step_m: float = 18.0
     local_classic_seed_spacing_m: float = 110.0
     local_classic_max_trace_len_m: float = 420.0
@@ -32,6 +39,8 @@ class LocalClassicFillConfig:
     local_classic_continue_prob: float = 0.70
     local_classic_culdesac_prob: float = 0.42
     local_classic_max_segments_per_block: int = 28
+    local_classic_max_road_distance_m: float = 500.0
+    local_classic_depth_decay_power: float = 1.5
     local_community_seed_count_per_block: int = 3
     local_community_spine_prob: float = 0.28
     local_arterial_setback_weight: float = 0.5
@@ -129,9 +138,41 @@ def _major_axis_angle_deg(block) -> float:
     return best_ang
 
 
+def _block_dims(block) -> tuple[float, float]:
+    try:
+        mrr = block.minimum_rotated_rectangle
+        coords = list(mrr.exterior.coords)
+        if len(coords) >= 4:
+            lens = []
+            for i in range(4):
+                x0, y0 = coords[i]
+                x1, y1 = coords[i + 1]
+                dx = float(x1 - x0)
+                dy = float(y1 - y0)
+                lens.append((dx * dx + dy * dy) ** 0.5)
+            lens = [float(v) for v in lens if v > 1e-6]
+            if lens:
+                return (min(lens), max(lens))
+    except Exception:
+        pass
+    minx, miny, maxx, maxy = block.bounds
+    w = float(maxx - minx)
+    h = float(maxy - miny)
+    return (min(w, h), max(w, h))
+
+
 def _unit_from_angle_deg(a: float) -> Vec2:
     r = np.deg2rad(float(a))
     return Vec2(float(np.cos(r)), float(np.sin(r))).normalized()
+
+
+def _quantile(vals: Sequence[float], q: float) -> float:
+    if not vals:
+        return 0.0
+    arr = sorted(float(v) for v in vals)
+    idx = int(round((len(arr) - 1) * float(q)))
+    idx = max(0, min(len(arr) - 1, idx))
+    return float(arr[idx])
 
 
 def generate_classic_local_fill(
@@ -171,12 +212,69 @@ def generate_classic_local_fill(
     base_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "collector", "local"})
     collector_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"collector"})
     arterial_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial"})
+    higher_order_segments = list(arterial_segments) + list(collector_segments)
     runtime_segments: list[Segment] = []
 
     queue: list[_State] = []
     block_seed_counts: list[int] = []
+    block_trace_len_caps: list[float] = []
+    block_endpoint_span_caps: list[float] = []
+    block_long_axes: list[float] = []
+    block_trace_target_enabled: list[bool] = []
+    local_spacing_m = max(24.0, float(getattr(cfg, "local_spacing_m", 130.0) or 130.0))
+    trace_target_min_m = max(120.0, float(getattr(cfg, "local_trace_target_min_m", 500.0) or 500.0))
+    trace_target_max_m = max(trace_target_min_m + 80.0, float(getattr(cfg, "local_trace_target_max_m", 1000.0) or 1000.0))
+    trace_soft_cap_m = max(trace_target_max_m + 120.0, float(getattr(cfg, "local_trace_soft_cap_m", 1200.0) or 1200.0))
+    small_block_exception_long_axis_m = max(
+        260.0,
+        float(getattr(cfg, "local_trace_exception_small_block_long_axis_m", 650.0) or 650.0),
+    )
+    force_continue_until_min = bool(getattr(cfg, "local_trace_force_continue_until_min", True))
+    trace_cap_sum = 0.0
+    trace_cap_n = 0
     for bi, block in enumerate(blocks):
         area = float(getattr(block, "area", 0.0) or 0.0)
+        bmin, bmax = _block_dims(block)
+        block_long_axes.append(float(bmax))
+        target_enabled = bool(bmax >= small_block_exception_long_axis_m)
+        block_trace_target_enabled.append(target_enabled)
+        legacy_max_cap = max(float(cfg.local_classic_min_trace_len_m) + 8.0, float(cfg.local_classic_max_trace_len_m))
+
+        if target_enabled:
+            dynamic_trace_cap = min(
+                max(trace_target_max_m, trace_soft_cap_m),
+                max(trace_target_max_m, min(trace_soft_cap_m, max(local_spacing_m * 4.0, bmax * 1.15))),
+            )
+            # Don't let the legacy 420m default artificially prevent 500m-1km traces.
+            if legacy_max_cap >= trace_target_max_m * 0.95:
+                dynamic_trace_cap = min(dynamic_trace_cap, max(trace_target_max_m, legacy_max_cap))
+            dynamic_span_cap = min(
+                dynamic_trace_cap * 0.98,
+                max(trace_target_min_m * 0.80, min(bmax * 0.96, trace_target_max_m * 0.95)),
+            )
+            if bmin > 1e-6:
+                dynamic_span_cap = min(dynamic_span_cap, max(trace_target_min_m * 0.75, bmin * 3.4))
+        else:
+            dynamic_trace_cap = min(
+                max(trace_soft_cap_m, legacy_max_cap),
+                max(
+                    legacy_max_cap,
+                    max(float(cfg.local_classic_min_trace_len_m) * 1.4, min(max(local_spacing_m * 3.4, 180.0), max(local_spacing_m * 2.3, bmax * 0.95))),
+                ),
+            )
+            dynamic_span_cap = min(
+                dynamic_trace_cap * 0.95,
+                max(local_spacing_m * 1.55, min(bmax * 0.85, local_spacing_m * 3.1)),
+            )
+            if bmin > 1e-6:
+                dynamic_span_cap = min(dynamic_span_cap, max(local_spacing_m * 1.35, bmin * 2.8))
+        dynamic_span_cap = max(32.0, float(dynamic_span_cap))
+        dynamic_trace_cap = max(float(cfg.local_classic_min_trace_len_m) * 1.2, float(dynamic_trace_cap))
+        block_trace_len_caps.append(float(dynamic_trace_cap))
+        block_endpoint_span_caps.append(float(dynamic_span_cap))
+        if area >= 2500.0:
+            trace_cap_sum += float(dynamic_trace_cap)
+            trace_cap_n += 1
         if area < 2500.0:
             block_seed_counts.append(0)
             continue
@@ -211,6 +309,10 @@ def generate_classic_local_fill(
     stop_reasons: dict[str, int] = {}
     branch_enq = 0
     cul_count = 0
+    accepted_trace_lengths: list[float] = []
+    accepted_trace_stop_reasons: list[str] = []
+    accepted_trace_block_indices: list[int] = []
+    accepted_trace_cul_flags: list[bool] = []
 
     step_m = max(8.0, float(cfg.local_classic_probe_step_m))
     junction_probe = max(8.0, step_m * 0.85)
@@ -237,7 +339,15 @@ def generate_classic_local_fill(
         connected = 0
         cul = False
         reason = "max_steps"
-        max_steps = max(4, int(float(cfg.local_classic_max_trace_len_m) / step_m) + 2)
+        trace_len_cap = float(block_trace_len_caps[st.block_idx]) if st.block_idx < len(block_trace_len_caps) else float(cfg.local_classic_max_trace_len_m)
+        endpoint_span_cap = float(block_endpoint_span_caps[st.block_idx]) if st.block_idx < len(block_endpoint_span_caps) else trace_len_cap * 0.9
+        trace_target_enabled = bool(st.block_idx < len(block_trace_target_enabled) and block_trace_target_enabled[st.block_idx])
+        trace_target_min_this = float(trace_target_min_m if trace_target_enabled else max(local_spacing_m * 1.8, 220.0))
+        trace_target_max_this = float(trace_target_max_m if trace_target_enabled else max(trace_target_min_this + 120.0, min(trace_len_cap, local_spacing_m * 4.6)))
+        trace_soft_cap_this = float(min(trace_len_cap, trace_soft_cap_m if trace_target_enabled else trace_len_cap))
+        block_long_axis_this = float(block_long_axes[st.block_idx]) if st.block_idx < len(block_long_axes) else 0.0
+        max_steps = max(4, int(trace_len_cap / step_m) + 2)
+        start_pos = pts[0]
 
         d0, _ = _nearest_road_distance_and_projection(st.pos, base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
         if d0 < junction_probe:
@@ -280,6 +390,15 @@ def generate_classic_local_fill(
                     break
                 d, nxt = alt, alt_nxt
 
+            # Distance-from-higher-order-roads constraint: stop local road
+            # growth that wanders too far from arterials/collectors.
+            max_road_dist = float(cfg.local_classic_max_road_distance_m)
+            if max_road_dist > 0.0 and (arterial_segments or collector_segments):
+                d_higher, _ = _nearest_road_distance_and_projection(nxt, arterial_segments + collector_segments)
+                if d_higher > max_road_dist:
+                    reason = "road_too_far"
+                    break
+
             seg = Segment(cur, nxt)
             if len(pts) >= 4:
                 bad = False
@@ -293,6 +412,25 @@ def generate_classic_local_fill(
 
             d_net, proj_net = _nearest_road_distance_and_projection(nxt, base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
             if d_net < junction_probe and proj_net is not None and total_len >= max(12.0, step_m):
+                if trace_target_enabled and total_len < trace_target_min_this:
+                    # Before the trace reaches the semantic target minimum, avoid terminating early just
+                    # because we touched the evolving local network. Prefer long semantic runs first.
+                    # In the very early phase, ignore all network snaps; later, allow high-order snaps.
+                    if total_len < trace_target_min_this * 0.7:
+                        d_net = float("inf")
+                        proj_net = None
+                    else:
+                        d_high, proj_high = (
+                            _nearest_road_distance_and_projection(nxt, higher_order_segments)
+                            if higher_order_segments
+                            else (float("inf"), None)
+                        )
+                        if not (d_high < junction_probe and proj_high is not None):
+                            d_net = float("inf")
+                            proj_net = None
+                        else:
+                            d_net, proj_net = d_high, proj_high
+            if d_net < junction_probe and proj_net is not None and total_len >= max(12.0, step_m):
                 if _point_in_poly_or_close(block, proj_net, tol=1.0) and proj_net.distance_to(cur) > 1.5:
                     pts.append(proj_net)
                     total_len += cur.distance_to(proj_net)
@@ -300,14 +438,48 @@ def generate_classic_local_fill(
                 reason = "near_network"
                 break
 
+            if total_len >= max(float(cfg.local_classic_min_trace_len_m), local_spacing_m * 1.15):
+                end_span_candidate = start_pos.distance_to(nxt)
+                if end_span_candidate > endpoint_span_cap:
+                    reason = "span_cap"
+                    break
+
             pts.append(nxt)
             total_len += cur.distance_to(nxt)
             prev_dir = d
+
+            end_span = start_pos.distance_to(pts[-1])
+            if trace_target_enabled:
+                if total_len >= max(trace_target_min_this * 0.8, float(cfg.local_classic_min_trace_len_m) * 2.2):
+                    if end_span < max(24.0, 0.20 * total_len):
+                        reason = "noodle_curve"
+                        break
+            elif total_len >= max(float(cfg.local_classic_min_trace_len_m) * 1.6, local_spacing_m * 2.2):
+                if end_span < max(10.0, 0.18 * total_len):
+                    reason = "noodle_curve"
+                    break
 
             if step_idx > 0 and (step_idx % 2 == 0) and st.depth < 8:
                 bp = float(cfg.local_classic_branch_prob)
                 if slope_deg > float(cfg.slope_serpentine_threshold_deg):
                     bp *= 0.8
+                # Depth-based probability decay: branches become rarer at
+                # higher generation depths to prevent infinite local sprawl.
+                depth_decay = max(0.0, (1.0 - float(st.depth) / 8.0)) ** float(cfg.local_classic_depth_decay_power)
+                bp *= depth_decay
+                # Distance-based branch probability decay: reduce branching
+                # far from higher-order roads for natural edge thinning.
+                if max_road_dist > 0.0 and (arterial_segments or collector_segments):
+                    d_branch_check, _ = _nearest_road_distance_and_projection(nxt, arterial_segments + collector_segments)
+                    if d_branch_check > 0.4 * max_road_dist:
+                        dist_ratio = min(1.0, d_branch_check / max_road_dist)
+                        bp *= max(0.1, 1.0 - dist_ratio)
+                if trace_target_enabled:
+                    if total_len < trace_target_min_this:
+                        # Prefer extending the primary trace before fragmenting the block.
+                        bp *= max(0.10, 0.35 + 0.35 * (total_len / max(trace_target_min_this, 1e-6)))
+                    elif total_len > trace_target_max_this:
+                        bp *= 0.25
                 if rng.random() < bp:
                     for sign in (-1.0, 1.0):
                         if rng.random() > (0.55 if sign < 0 else 0.75):
@@ -322,11 +494,33 @@ def generate_classic_local_fill(
                         branch_enq += 1
 
             if total_len >= float(cfg.local_classic_min_trace_len_m):
-                if rng.random() > float(cfg.local_classic_continue_prob):
+                local_cont_prob = float(cfg.local_classic_continue_prob)
+                # Distance-based continue probability decay for natural edge
+                # thinning: roads far from higher-order network terminate sooner.
+                if max_road_dist > 0.0 and (arterial_segments or collector_segments):
+                    d_cont_check, _ = _nearest_road_distance_and_projection(cur, arterial_segments + collector_segments)
+                    if d_cont_check > 0.4 * max_road_dist:
+                        dist_ratio = min(1.0, d_cont_check / max_road_dist)
+                        local_cont_prob *= max(0.15, 1.0 - dist_ratio)
+                if trace_len_cap > max(float(cfg.local_classic_min_trace_len_m) + 1.0, 1.0):
+                    trace_ratio = min(1.4, total_len / max(trace_len_cap, 1e-6))
+                    if trace_ratio > 0.75:
+                        local_cont_prob *= max(0.35, 1.0 - (trace_ratio - 0.75) / 0.65)
+                if trace_target_enabled:
+                    if force_continue_until_min and total_len < trace_target_min_this:
+                        progress_to_min = min(1.0, total_len / max(trace_target_min_this, 1e-6))
+                        local_cont_prob = max(local_cont_prob, 0.94 + 0.05 * (1.0 - progress_to_min))
+                    elif total_len > trace_target_max_this:
+                        over_ratio = min(
+                            1.0,
+                            max(0.0, (total_len - trace_target_max_this) / max(trace_soft_cap_this - trace_target_max_this, 1e-6)),
+                        )
+                        local_cont_prob *= max(0.04, 1.0 - 0.92 * over_ratio)
+                if rng.random() > local_cont_prob:
                     cul = rng.random() < float(cfg.local_classic_culdesac_prob)
                     reason = "stochastic_stop"
                     break
-            if total_len >= float(cfg.local_classic_max_trace_len_m):
+            if total_len >= trace_soft_cap_this:
                 reason = "max_len"
                 break
 
@@ -368,14 +562,71 @@ def generate_classic_local_fill(
         runtime_segments.extend(_polyline_segments(pts))
         per_block_counts[st.block_idx] += 1
         stop_reasons[reason] = stop_reasons.get(reason, 0) + 1
+        accepted_trace_lengths.append(float(trace_len))
+        accepted_trace_stop_reasons.append(str(reason))
+        accepted_trace_block_indices.append(int(st.block_idx))
+        accepted_trace_cul_flags.append(bool(cul))
 
     for reason, count in sorted(stop_reasons.items(), key=lambda kv: (-kv[1], kv[0]))[:6]:
         notes.append(f"local_classic_stop:{reason}:{count}")
     notes.append(f"local_classic_trace_count:{len(traces)}")
+    if trace_cap_n > 0:
+        notes.append(f"local_classic_avg_trace_cap_m:{int(round(trace_cap_sum / trace_cap_n))}")
+    trace_len_p50 = _quantile(accepted_trace_lengths, 0.50)
+    trace_len_p90 = _quantile(accepted_trace_lengths, 0.90)
+    trace_len_p99 = _quantile(accepted_trace_lengths, 0.99)
+    short_count = sum(1 for v in accepted_trace_lengths if v < trace_target_min_m)
+    band_count = sum(1 for v in accepted_trace_lengths if trace_target_min_m <= v <= trace_target_max_m)
+    long_count = sum(1 for v in accepted_trace_lengths if v > trace_target_max_m)
+    cul_short_count = sum(1 for v, cul in zip(accepted_trace_lengths, accepted_trace_cul_flags) if cul and v < trace_target_min_m)
+    cul_total = sum(1 for cul in accepted_trace_cul_flags if cul)
+    nonexception_idx: list[int] = []
+    exception_reasons = {"river_blocked", "block_exit", "near_network", "road_too_far", "boundary"}
+    for i, (length_m, stop_reason, block_idx, cul) in enumerate(
+        zip(accepted_trace_lengths, accepted_trace_stop_reasons, accepted_trace_block_indices, accepted_trace_cul_flags)
+    ):
+        _ = length_m
+        bmax = float(block_long_axes[block_idx]) if 0 <= block_idx < len(block_long_axes) else 0.0
+        if cul:
+            continue
+        if bmax < small_block_exception_long_axis_m:
+            continue
+        if str(stop_reason) in exception_reasons:
+            continue
+        nonexception_idx.append(i)
+    nonexception_lengths = [accepted_trace_lengths[i] for i in nonexception_idx]
+    nonexception_band_count = sum(1 for v in nonexception_lengths if trace_target_min_m <= v <= trace_target_max_m)
+    if accepted_trace_lengths:
+        notes.append(
+            "local_classic_trace_len_m:"
+            f"p50={int(round(trace_len_p50))},p90={int(round(trace_len_p90))},p99={int(round(trace_len_p99))}"
+        )
+        notes.append(
+            "local_classic_trace_target_rates:"
+            f"short={short_count/len(accepted_trace_lengths):.2f},"
+            f"band={band_count/len(accepted_trace_lengths):.2f},"
+            f"long={long_count/len(accepted_trace_lengths):.2f}"
+        )
+    if nonexception_lengths:
+        notes.append(
+            "local_classic_trace_nonexception_band_rate:"
+            f"{nonexception_band_count/len(nonexception_lengths):.2f}"
+        )
     numeric = {
         "local_classic_enabled": 1.0,
         "local_classic_trace_count": float(len(traces)),
         "local_classic_culdesac_count": float(cul_count),
         "local_classic_branch_enqueued_count": float(branch_enq),
+        "local_classic_avg_trace_cap_m": float(trace_cap_sum / trace_cap_n) if trace_cap_n > 0 else 0.0,
+        "local_classic_trace_len_p50_m": float(trace_len_p50),
+        "local_classic_trace_len_p90_m": float(trace_len_p90),
+        "local_classic_trace_len_p99_m": float(trace_len_p99),
+        "local_classic_trace_short_rate": float(short_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
+        "local_classic_trace_target_band_rate": float(band_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
+        "local_classic_trace_long_rate": float(long_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
+        "local_classic_trace_culdesac_short_rate": float(cul_short_count / cul_total) if cul_total > 0 else 0.0,
+        "local_classic_trace_nonexception_target_band_rate": (
+            float(nonexception_band_count / len(nonexception_lengths)) if nonexception_lengths else 0.0
+        ),
     }
     return traces, cul_flags, trace_meta, notes, numeric

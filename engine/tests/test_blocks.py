@@ -1,3 +1,7 @@
+from math import hypot
+
+from shapely.geometry import Polygon
+
 from engine.generator import generate_city_staged
 from engine.models import GenerateConfig
 
@@ -9,6 +13,34 @@ ALLOWED_PARCEL_CLASSES = {
     "green_candidate",
     "public_facility_candidate",
 }
+
+
+def _bbox_span_and_aspect(points) -> tuple[float, float]:
+    if not points or len(points) < 3:
+        return 0.0, 1.0
+    poly = Polygon([(float(p.x), float(p.y)) for p in points])
+    if poly.is_empty:
+        return 0.0, 1.0
+    try:
+        mrr = poly.minimum_rotated_rectangle
+        coords = list(mrr.exterior.coords) if isinstance(mrr, Polygon) else []
+    except Exception:
+        coords = []
+    dims = []
+    if len(coords) >= 5:
+        for i in range(4):
+            x0, y0 = coords[i]
+            x1, y1 = coords[i + 1]
+            d = hypot(x1 - x0, y1 - y0)
+            if d > 1e-9:
+                dims.append(float(d))
+    if len(dims) < 2:
+        minx, miny, maxx, maxy = poly.bounds
+        dims = [float(maxx - minx), float(maxy - miny)]
+    span = max(dims) if dims else 0.0
+    nonzero = [d for d in dims if d > 1e-9]
+    aspect = span / max(min(nonzero) if nonzero else 1.0, 1e-9)
+    return float(span), float(aspect)
 
 
 def test_staged_generation_emits_blocks_parcels_and_pedestrian_paths():
@@ -34,6 +66,8 @@ def test_staged_generation_emits_blocks_parcels_and_pedestrian_paths():
     assert final_stage.layers.land_blocks is not None
     assert final_stage.layers.parcel_lots is not None
     assert final_stage.layers.pedestrian_paths is not None
+    assert len(final_stage.layers.land_blocks) == len(artifact.blocks or [])
+    assert len(final_stage.layers.parcel_lots) == len(artifact.parcels or [])
 
     for edge in artifact.roads.edges:
         assert edge.width_m > 0.0
@@ -43,3 +77,19 @@ def test_staged_generation_emits_blocks_parcels_and_pedestrian_paths():
         assert parcel.area_m2 > 0.0
         assert parcel.parcel_class in ALLOWED_PARCEL_CLASSES
 
+    block_ids = {b.id for b in (artifact.blocks or [])}
+    assert all((p.parent_block_id in block_ids) for p in (artifact.parcels or []))
+
+    extent = float(artifact.terrain.extent_m)
+    assert not any(
+        _bbox_span_and_aspect(block.points)[0] > 0.35 * extent
+        for block in (artifact.blocks or [])
+    )
+    assert not any(
+        _bbox_span_and_aspect(block.points)[1] > 20.0
+        for block in (artifact.blocks or [])
+    )
+    assert not any(
+        parcel.area_m2 > 1000.0 and _bbox_span_and_aspect(parcel.points)[1] > 35.0
+        for parcel in (artifact.parcels or [])
+    )

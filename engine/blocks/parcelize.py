@@ -94,6 +94,13 @@ def generate_pedestrian_paths_and_parcels(
             corridors_by_block.append(Polygon())
             parcels_by_block.append([block])
             continue
+        min_dim0, max_dim0 = _oriented_bbox_dims(block)
+        aspect0 = max_dim0 / max(min_dim0, 1e-9)
+        if aspect0 > 12.0 or max_dim0 > 1_800.0:
+            # Defensive guard: extraction should prevent this, but do not amplify pathological superblocks.
+            corridors_by_block.append(Polygon())
+            parcels_by_block.append([block])
+            continue
 
         angle = _dominant_angle_deg(block)
         rot = affinity.rotate(block, -angle, origin='centroid')
@@ -171,6 +178,114 @@ def generate_pedestrian_paths_and_parcels(
 def _bbox_dims(poly: Polygon) -> Tuple[float, float]:
     minx, miny, maxx, maxy = poly.bounds
     return float(maxx - minx), float(maxy - miny)
+
+
+def _oriented_bbox_dims(poly: Polygon) -> Tuple[float, float]:
+    angle = _dominant_angle_deg(poly)
+    try:
+        rot = affinity.rotate(poly, -angle, origin='centroid')
+    except Exception:
+        w, h = _bbox_dims(poly)
+        return min(w, h), max(w, h)
+    minx, miny, maxx, maxy = rot.bounds
+    w = float(maxx - minx)
+    h = float(maxy - miny)
+    return min(w, h), max(w, h)
+
+
+def _split_pathological_parcel(
+    poly: Polygon,
+    *,
+    max_aspect_ratio: float = 35.0,
+    min_guard_area_m2: float = 1_000.0,
+    min_piece_area_m2: float = 180.0,
+    depth: int = 0,
+    max_depth: int = 4,
+) -> List[Polygon]:
+    """Last-resort splitter for rare elongated strips that survive parcelization."""
+    if getattr(poly, "is_empty", True):
+        return []
+    poly = poly.buffer(0)
+    if poly.is_empty:
+        return []
+    if not isinstance(poly, Polygon):
+        out: List[Polygon] = []
+        for g in getattr(poly, "geoms", []):
+            if isinstance(g, Polygon):
+                out.extend(
+                    _split_pathological_parcel(
+                        g,
+                        max_aspect_ratio=max_aspect_ratio,
+                        min_guard_area_m2=min_guard_area_m2,
+                        min_piece_area_m2=min_piece_area_m2,
+                        depth=depth,
+                        max_depth=max_depth,
+                    )
+                )
+        return out
+
+    if depth >= max_depth or float(poly.area) <= float(min_guard_area_m2):
+        return [poly]
+
+    w0, h0 = _bbox_dims(poly)
+    axis_aspect = max(w0, h0) / max(min(w0, h0), 1e-9)
+    # Fast path: only rare axis-aligned strips need the expensive oriented-rectangle work.
+    if axis_aspect <= float(max_aspect_ratio):
+        return [poly]
+
+    angle = _dominant_angle_deg(poly)
+    try:
+        rot = affinity.rotate(poly, -angle, origin='centroid')
+    except Exception:
+        return [poly]
+    minx, miny, maxx, maxy = rot.bounds
+    w = float(maxx - minx)
+    h = float(maxy - miny)
+    if min(w, h) <= 1e-6:
+        return [poly]
+
+    # Split along the elongated axis midpoint (perpendicular cut) to reduce strip aspect ratio quickly.
+    if w >= h:
+        x = minx + 0.5 * w
+        cutter = LineString([(x, miny - 10.0), (x, maxy + 10.0)])
+    else:
+        y = miny + 0.5 * h
+        cutter = LineString([(minx - 10.0, y), (maxx + 10.0, y)])
+
+    try:
+        pieces_rot = split(rot, cutter)
+    except Exception:
+        return [poly]
+
+    pieces: List[Polygon] = []
+    for g in getattr(pieces_rot, "geoms", [pieces_rot]):
+        if not isinstance(g, Polygon):
+            continue
+        world = affinity.rotate(g, angle, origin=poly.centroid).buffer(0)
+        if world.is_empty:
+            continue
+        if isinstance(world, Polygon):
+            pieces.append(world)
+        else:
+            pieces.extend([p for p in getattr(world, "geoms", []) if isinstance(p, Polygon)])
+    if len(pieces) < 2:
+        return [poly]
+
+    out: List[Polygon] = []
+    for piece in pieces:
+        if float(piece.area) < float(min_piece_area_m2):
+            continue
+        out.extend(
+            _split_pathological_parcel(
+                piece,
+                max_aspect_ratio=max_aspect_ratio,
+                min_guard_area_m2=min_guard_area_m2,
+                min_piece_area_m2=min_piece_area_m2,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+        )
+    return out or [poly]
 
 
 def _recursive_split_polygon(
@@ -361,14 +476,48 @@ def generate_frontage_parcels(
                 rng_seed=int(cfg.seed + block_idx * 1009 + parcel_idx * 97),
                 curvilinear_split_bias=block_curvy_bias,
             )
+            parcel_refined: List[Polygon] = []
+            revert_to_base = False
             for piece in splits:
                 if piece.area < 180.0:
                     continue
                 w, h = _bbox_dims(piece)
                 if min(w, h) < min(block_frontage, block_depth) * 0.5:
                     continue
-                refined.append(piece)
-        refined_by_block.append(refined or list(base_parcels))
+                if piece.area > 1_000.0:
+                    axis_aspect = max(w, h) / max(min(w, h), 1e-9)
+                    paspect = axis_aspect
+                    if axis_aspect > 20.0:
+                        pmin, pmax = _oriented_bbox_dims(piece)
+                        paspect = pmax / max(pmin, 1e-9)
+                    if paspect > 35.0 or axis_aspect > 35.0:
+                        revert_to_base = True
+                        break
+                parcel_refined.append(piece)
+            if revert_to_base:
+                refined.append(poly)
+            elif parcel_refined:
+                refined.extend(parcel_refined)
+            else:
+                refined.append(poly)
+        sanitized: List[Polygon] = []
+        for poly in (refined or list(base_parcels)):
+            if poly.area <= 1_000.0:
+                sanitized.append(poly)
+                continue
+            w0, h0 = _bbox_dims(poly)
+            axis_aspect0 = max(w0, h0) / max(min(w0, h0), 1e-9)
+            if axis_aspect0 <= 35.0:
+                sanitized.append(poly)
+                continue
+            for piece in _split_pathological_parcel(poly):
+                if piece.area < 180.0:
+                    continue
+                w, h = _bbox_dims(piece)
+                if min(w, h) < min(block_frontage, block_depth) * 0.45:
+                    continue
+                sanitized.append(piece)
+        refined_by_block.append(sanitized or refined or list(base_parcels))
 
     return ParcelizationResult(
         pedestrian_paths=list(base.pedestrian_paths),

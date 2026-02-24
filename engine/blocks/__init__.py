@@ -1,8 +1,9 @@
 from .classification import classify_blocks_and_parcels
-from .extraction import BlockExtractionResult, extract_macro_blocks
+from .extraction import BlockExtractionConfig, BlockExtractionResult, extract_macro_blocks
 from .parcelize import FrontageParcelConfig, ParcelizationResult, generate_frontage_parcels, generate_pedestrian_paths_and_parcels
 
 __all__ = [
+    'BlockExtractionConfig',
     'BlockExtractionResult',
     'ParcelizationResult',
     'FrontageParcelConfig',

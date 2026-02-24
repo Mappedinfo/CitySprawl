@@ -130,6 +130,53 @@ def _polyline_length(points: Sequence[Vec2]) -> float:
     return float(total)
 
 
+def _polyline_endpoint_span(points: Sequence[Vec2]) -> float:
+    if len(points) < 2:
+        return 0.0
+    return float(points[0].distance_to(points[-1]))
+
+
+def _split_polyline_by_length(points: Sequence[Vec2], max_chunk_length_m: float) -> list[list[Vec2]]:
+    pts = list(points)
+    if len(pts) < 2 or max_chunk_length_m <= 1e-6:
+        return [pts]
+    out: list[list[Vec2]] = []
+    chunk: list[Vec2] = [pts[0]]
+    acc = 0.0
+    for i in range(len(pts) - 1):
+        a = chunk[-1]
+        b_full = pts[i + 1]
+        rem_end = b_full
+        rem_len = a.distance_to(rem_end)
+        if rem_len <= 1e-9:
+            continue
+        while rem_len > 1e-9 and acc + rem_len > max_chunk_length_m:
+            cut_dist = max_chunk_length_m - acc
+            if cut_dist <= 1e-6:
+                break
+            t = cut_dist / max(rem_len, 1e-9)
+            cut = Vec2(a.x + (rem_end.x - a.x) * t, a.y + (rem_end.y - a.y) * t)
+            chunk.append(cut)
+            if len(chunk) >= 2 and _polyline_length(chunk) >= 8.0:
+                out.append(chunk)
+            chunk = [cut]
+            a = cut
+            rem_len = a.distance_to(rem_end)
+            acc = 0.0
+        if rem_len > 1e-9:
+            chunk.append(rem_end)
+            acc += rem_len
+    if len(chunk) >= 2 and _polyline_length(chunk) >= 8.0:
+        out.append(chunk)
+    if not out:
+        return [pts]
+    if len(out) >= 2 and _polyline_length(out[-1]) < 14.0:
+        tail = out.pop()
+        merged = out[-1][:-1] + tail
+        out[-1] = merged
+    return out
+
+
 def _polyline_cost(
     points: Sequence[Vec2],
     extent_m: float,
@@ -988,8 +1035,39 @@ def _append_polyline_edge(
     points = list(pts)
     if len(points) < 2:
         return
-    if _polyline_length(points) < 8.0:
+    total_poly_len = _polyline_length(points)
+    if total_poly_len < 8.0:
         return
+    if road_class == "local":
+        end_span = _polyline_endpoint_span(points)
+        sinuosity = total_poly_len / max(end_span, 1e-6)
+        if total_poly_len > 260.0 and (total_poly_len > 340.0 or sinuosity > 1.75):
+            chunk_cap = 280.0
+            if sinuosity > 2.8 or total_poly_len > 500.0:
+                chunk_cap = 220.0
+            chunks = _split_polyline_by_length(points, chunk_cap)
+            if len(chunks) > 1:
+                base_flags = set(edge_flags or set())
+                for ci, chunk in enumerate(chunks):
+                    sub_flags = set(base_flags)
+                    if "culdesac" in sub_flags and ci != (len(chunks) - 1):
+                        sub_flags.discard("culdesac")
+                    _append_polyline_edge(
+                        chunk,
+                        road_class=road_class,
+                        width_m=width_m,
+                        render_order=render_order,
+                        edge_id_suffix=edge_id_suffix if ci == (len(chunks) - 1) else "",
+                        edge_flags=sub_flags or None,
+                        nodes=nodes,
+                        edges=edges,
+                        extent_m=extent_m,
+                        slope=slope,
+                        river_mask=river_mask,
+                        slope_penalty=slope_penalty,
+                        river_cross_penalty=river_cross_penalty,
+                    )
+                return
 
     u_id = f"hnode-{len(nodes)}-{len(edges)}-u"
     nodes.append(BuiltRoadNode(id=u_id, pos=points[0], kind=road_class))
@@ -1138,6 +1216,8 @@ def _generate_hierarchy_linework(
     local_classic_continue_prob: float,
     local_classic_culdesac_prob: float,
     local_classic_max_segments_per_block: int,
+    local_classic_max_road_distance_m: float,
+    local_classic_depth_decay_power: float,
     local_community_seed_count_per_block: int,
     local_community_spine_prob: float,
     local_arterial_setback_weight: float,
@@ -1156,6 +1236,8 @@ def _generate_hierarchy_linework(
     classic_culdesac_prob: float,
     classic_max_queue_size: int,
     classic_max_segments: int,
+    classic_max_arterial_distance_m: float,
+    classic_depth_decay_power: float,
     slope_straight_threshold_deg: float,
     slope_serpentine_threshold_deg: float,
     slope_hard_limit_deg: float,
@@ -1261,6 +1343,8 @@ def _generate_hierarchy_linework(
                         classic_culdesac_prob=classic_culdesac_prob,
                         classic_max_queue_size=classic_max_queue_size,
                         classic_max_segments=classic_max_segments,
+                        classic_max_arterial_distance_m=classic_max_arterial_distance_m,
+                        classic_depth_decay_power=classic_depth_decay_power,
                         slope_straight_threshold_deg=slope_straight_threshold_deg,
                         slope_serpentine_threshold_deg=slope_serpentine_threshold_deg,
                         slope_hard_limit_deg=slope_hard_limit_deg,
@@ -1358,6 +1442,8 @@ def _generate_hierarchy_linework(
     local_backend = (local_generator or "classic_sprawl").lower()
     local_added = 0
     local_need_grid_supplement = False
+    local_grid_supplement_budget: Optional[int] = None
+    supplement_added = 0
     pending_local_entries: list[dict] = []
     if local_backend == "classic_sprawl":
         try:
@@ -1381,6 +1467,7 @@ def _generate_hierarchy_linework(
                     hubs=list(hubs or []),
                     blocks=list(local_blocks),
                     cfg=LocalClassicFillConfig(
+                        local_spacing_m=local_spacing_m,
                         local_classic_probe_step_m=local_classic_probe_step_m,
                         local_classic_seed_spacing_m=local_classic_seed_spacing_m,
                         local_classic_max_trace_len_m=local_classic_max_trace_len_m,
@@ -1390,6 +1477,8 @@ def _generate_hierarchy_linework(
                         local_classic_continue_prob=local_classic_continue_prob,
                         local_classic_culdesac_prob=local_classic_culdesac_prob,
                         local_classic_max_segments_per_block=local_classic_max_segments_per_block,
+                        local_classic_max_road_distance_m=local_classic_max_road_distance_m,
+                        local_classic_depth_decay_power=local_classic_depth_decay_power,
                         local_community_seed_count_per_block=local_community_seed_count_per_block,
                         local_community_spine_prob=local_community_spine_prob,
                         local_arterial_setback_weight=local_arterial_setback_weight,
@@ -1439,19 +1528,32 @@ def _generate_hierarchy_linework(
                     numeric["local_culdesac_edge_count_pre_topology"] = float(sum(1 for v in local_cul_flags if bool(v)))
                     numeric["local_classic_trace_count"] = float(len(local_traces))
                     arterial_count_now = sum(1 for e in edges if str(getattr(e, "road_class", "")) == "arterial")
-                    collector_count_now = sum(1 for e in edges if str(getattr(e, "road_class", "")) == "collector")
-                    min_local_target = max(24, arterial_count_now * 4 - collector_count_now)
+                    # Use an arterial-anchored local target; pre-topology collector counts are unstable and
+                    # often shrink after intersection/syntax postprocess, which previously suppressed
+                    # supplement when it was still needed.
+                    min_local_target = max(24, arterial_count_now * 4)
                     if local_added < min_local_target:
                         local_need_grid_supplement = True
+                        deficit = int(max(0, min_local_target - local_added))
+                        # Budgeted supplement: add enough extra locals to recover hierarchy density,
+                        # but avoid flooding every block with grid stripes.
+                        # Budget leaves headroom for downstream intersection/syntax pruning.
+                        local_grid_supplement_budget = int(max(16, min(320, deficit * 4)))
                         notes.append(f"local_generator_supplement:grid_clip:{local_added}->{min_local_target}")
 
     if local_backend != "classic_sprawl" or local_need_grid_supplement:
         for bi, block in enumerate(local_blocks):
+            if local_backend == "classic_sprawl" and local_need_grid_supplement and local_grid_supplement_budget is not None:
+                if supplement_added >= int(local_grid_supplement_budget):
+                    break
             area = float(getattr(block, "area", 0.0) or 0.0)
             if area < max(local_spacing_m * local_spacing_m * 3.0, 4_000.0):
                 continue
             geom = _subtract_river_setback(block, river_union, river_setback_m)
             for part in _iter_polys_geom(geom):
+                if local_backend == "classic_sprawl" and local_need_grid_supplement and local_grid_supplement_budget is not None:
+                    if supplement_added >= int(local_grid_supplement_budget):
+                        break
                 part_area = float(getattr(part, "area", 0.0) or 0.0)
                 if part_area < max(local_spacing_m * local_spacing_m * 2.0, 3_000.0):
                     continue
@@ -1462,6 +1564,12 @@ def _generate_hierarchy_linework(
                     angle += 90.0
                 angle = _styled_axis_angle_deg(angle, style, rng, "local")
                 max_lines = int(min(36, max(1, part_area / max(local_spacing_m * local_spacing_m * 3.0, 1.0))))
+                if local_backend == "classic_sprawl" and local_need_grid_supplement and local_grid_supplement_budget is not None:
+                    remaining = max(0, int(local_grid_supplement_budget) - supplement_added)
+                    if remaining <= 0:
+                        break
+                    # In supplement mode, add sparse connectors instead of fully striping each residual block.
+                    max_lines = int(max(1, min(max_lines, 2, remaining)))
                 lines = _parallel_lines_in_polygon(
                     part,
                     spacing_m=float(local_spacing_m),
@@ -1497,10 +1605,17 @@ def _generate_hierarchy_linework(
                         }
                     )
                     local_added += 1
+                    supplement_added += 1
+                    if local_backend == "classic_sprawl" and local_need_grid_supplement and local_grid_supplement_budget is not None:
+                        if supplement_added >= int(local_grid_supplement_budget):
+                            break
         if local_backend != "classic_sprawl":
             notes.append("local_generator:grid_clip")
         else:
             notes.append("local_generator_grid_clip_supplement:1")
+            if local_grid_supplement_budget is not None:
+                notes.append(f"local_generator_grid_clip_supplement_budget:{int(local_grid_supplement_budget)}")
+                notes.append(f"local_generator_grid_clip_supplement_added:{int(supplement_added)}")
     else:
         notes.append("local_generator:classic_sprawl")
     if local_backend == "classic_sprawl" and local_need_grid_supplement:
@@ -1514,6 +1629,8 @@ def _generate_hierarchy_linework(
     reroute_path_points_sum = 0.0
     reroute_length_gain_sum = 0.0
     reroute_length_gain_n = 0
+    reroute_rejected_noodle = 0
+    reroute_rejected_gain = 0
     if pending_local_entries and str(local_geometry_mode or "classic_sprawl_rerouted").lower() != "trace_direct":
         try:
             from engine.roads.local_reroute import (  # type: ignore
@@ -1587,13 +1704,51 @@ def _generate_hierarchy_linework(
                         # keep notes compact
                         continue
                 if float(reroute_numeric.get("applied", 0.0)) > 0.5 and len(rerouted_pts) >= 2:
+                    orig_pts = list(entry.get("pts", []) or [])
+                    orig_len = max(float(entry.get("length_m", 0.0) or 0.0), _polyline_length(orig_pts), 1e-6)
+                    new_len = _polyline_length(rerouted_pts)
+                    end_span = _polyline_endpoint_span(rerouted_pts)
+                    sinuosity = new_len / max(end_span, 1e-6)
+                    length_gain_ratio = float(reroute_numeric.get("length_gain_ratio", (new_len / orig_len)))
+                    meta_connected = False
+                    if isinstance(meta, dict):
+                        meta_connected = bool(meta.get("connected_to_collector", False))
+                    elif meta is not None:
+                        meta_connected = bool(getattr(meta, "connected_to_collector", False))
+                    soft_len_cap = max(
+                        180.0,
+                        min(
+                            max(float(local_classic_max_trace_len_m) * 1.6, float(local_spacing_m) * 4.0),
+                            float(local_spacing_m) * 5.5,
+                        ),
+                    )
+                    gain_cap = 2.75 if meta_connected else 2.35
+                    reject_noodle = bool(
+                        (new_len > max(soft_len_cap, orig_len * gain_cap))
+                        or (new_len > max(float(local_spacing_m) * 3.2, 220.0) and sinuosity > 4.8)
+                        or (end_span < 1e-6 and new_len > 40.0)
+                    )
+                    reject_gain = bool(length_gain_ratio > (3.4 if meta_connected else 2.9))
+                    if reject_noodle or reject_gain:
+                        reroute_fallback += 1
+                        if reject_noodle:
+                            reroute_rejected_noodle += 1
+                        if reject_gain:
+                            reroute_rejected_gain += 1
+                        entry_flags = set(entry.get("flags", set()) or set())
+                        entry_flags.add("local_reroute_rejected")
+                        if reject_noodle:
+                            entry_flags.add("local_reroute_rejected_noodle")
+                        entry["flags"] = entry_flags
+                        continue
                     entry["pts"] = rerouted_pts
+                    entry["length_m"] = float(new_len)
                     entry_flags = set(entry.get("flags", set()) or set())
                     entry_flags.add("local_rerouted")
                     entry["flags"] = entry_flags
                     reroute_applied += 1
                     reroute_path_points_sum += float(reroute_numeric.get("path_points", len(rerouted_pts)))
-                    reroute_length_gain_sum += float(reroute_numeric.get("length_gain_ratio", 1.0))
+                    reroute_length_gain_sum += float(length_gain_ratio)
                     reroute_length_gain_n += 1
                     if bool(entry.get("is_grid_supplement", False)):
                         reroute_grid_applied += 1
@@ -1602,6 +1757,8 @@ def _generate_hierarchy_linework(
             if reroute_candidate_count > 0:
                 notes.append(f"local_geometry_reroute:applied:{reroute_applied}/{reroute_candidate_count}")
                 notes.append(f"local_reroute_coverage:{str(local_reroute_coverage)}")
+                if reroute_rejected_noodle > 0:
+                    notes.append(f"local_reroute_rejected_noodle:{reroute_rejected_noodle}")
 
     numeric["local_reroute_candidate_count"] = float(reroute_candidate_count)
     numeric["local_reroute_applied_count"] = float(reroute_applied)
@@ -1610,6 +1767,15 @@ def _generate_hierarchy_linework(
     numeric["local_reroute_avg_path_points"] = float(reroute_path_points_sum / reroute_applied) if reroute_applied > 0 else 0.0
     numeric["local_reroute_avg_length_gain_ratio"] = (
         float(reroute_length_gain_sum / reroute_length_gain_n) if reroute_length_gain_n > 0 else 0.0
+    )
+    numeric["local_reroute_rejected_noodle_count"] = float(reroute_rejected_noodle)
+    numeric["local_reroute_rejected_gain_count"] = float(reroute_rejected_gain)
+    numeric["local_grid_supplement_budget"] = float(local_grid_supplement_budget or 0)
+    numeric["local_grid_supplement_added_count"] = float(supplement_added)
+    numeric["local_grid_supplement_used_ratio"] = (
+        float(supplement_added / max(int(local_grid_supplement_budget or 0), 1))
+        if local_grid_supplement_budget is not None
+        else 0.0
     )
 
     # Append local edges after optional reroute so intersections see final local geometry.
@@ -1826,6 +1992,8 @@ def generate_roads(
     local_classic_continue_prob: float = 0.70,
     local_classic_culdesac_prob: float = 0.42,
     local_classic_max_segments_per_block: int = 28,
+    local_classic_max_road_distance_m: float = 500.0,
+    local_classic_depth_decay_power: float = 1.5,
     local_community_seed_count_per_block: int = 3,
     local_community_spine_prob: float = 0.28,
     local_arterial_setback_weight: float = 0.5,
@@ -1844,6 +2012,8 @@ def generate_roads(
     classic_culdesac_prob: float = 0.18,
     classic_max_queue_size: int = 2000,
     classic_max_segments: int = 1200,
+    classic_max_arterial_distance_m: float = 800.0,
+    classic_depth_decay_power: float = 1.5,
     slope_straight_threshold_deg: float = 5.0,
     slope_serpentine_threshold_deg: float = 15.0,
     slope_hard_limit_deg: float = 22.0,
@@ -1992,6 +2162,8 @@ def generate_roads(
         local_classic_continue_prob=local_classic_continue_prob,
         local_classic_culdesac_prob=local_classic_culdesac_prob,
         local_classic_max_segments_per_block=local_classic_max_segments_per_block,
+        local_classic_max_road_distance_m=local_classic_max_road_distance_m,
+        local_classic_depth_decay_power=local_classic_depth_decay_power,
         local_community_seed_count_per_block=local_community_seed_count_per_block,
         local_community_spine_prob=local_community_spine_prob,
         local_arterial_setback_weight=local_arterial_setback_weight,
@@ -2010,6 +2182,8 @@ def generate_roads(
         classic_culdesac_prob=classic_culdesac_prob,
         classic_max_queue_size=classic_max_queue_size,
         classic_max_segments=classic_max_segments,
+        classic_max_arterial_distance_m=classic_max_arterial_distance_m,
+        classic_depth_decay_power=classic_depth_decay_power,
         slope_straight_threshold_deg=slope_straight_threshold_deg,
         slope_serpentine_threshold_deg=slope_serpentine_threshold_deg,
         slope_hard_limit_deg=slope_hard_limit_deg,

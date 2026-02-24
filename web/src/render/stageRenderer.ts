@@ -298,6 +298,27 @@ function drawLandBlocks(
   drawPolygonList(ctx, artifact, blocks, viewport, cssWidth, cssHeight, 'rgba(0,0,0,0)', 'rgba(226, 242, 255, 0.28)', 0.9);
 }
 
+function drawLandBlockOutlines(
+  ctx: CanvasRenderingContext2D,
+  artifact: CityArtifact,
+  blocks: LandBlock[],
+  viewport: Viewport,
+  cssWidth: number,
+  cssHeight: number,
+): void {
+  drawPolygonList(
+    ctx,
+    artifact,
+    blocks,
+    viewport,
+    cssWidth,
+    cssHeight,
+    'rgba(0,0,0,0)',
+    'rgba(226, 242, 255, 0.58)',
+    1.2,
+  );
+}
+
 function drawPedestrianPaths(
   ctx: CanvasRenderingContext2D,
   artifact: CityArtifact,
@@ -390,12 +411,19 @@ export function drawStageScene({
       });
     }
 
-    if (stage && layers.blocks && hasStageLayer(stage, 'blocks') && stage.layers.land_blocks) {
-      drawLandBlocks(ctx, artifact, stage.layers.land_blocks, viewport, cssWidth, cssHeight);
+    const showStageBlocks = Boolean(stage && layers.blocks && hasStageLayer(stage, 'blocks') && stage.layers.land_blocks);
+    const showStageParcels = Boolean(stage && layers.parcels && hasStageLayer(stage, 'parcels') && stage.layers.parcel_lots);
+
+    if (showStageBlocks && !showStageParcels) {
+      drawLandBlocks(ctx, artifact, stage!.layers.land_blocks!, viewport, cssWidth, cssHeight);
     }
 
-    if (stage && layers.parcels && hasStageLayer(stage, 'parcels') && stage.layers.parcel_lots) {
-      drawParcelLots(ctx, artifact, stage.layers.parcel_lots, viewport, cssWidth, cssHeight);
+    if (showStageParcels) {
+      drawParcelLots(ctx, artifact, stage!.layers.parcel_lots!, viewport, cssWidth, cssHeight);
+    }
+
+    if (showStageBlocks && showStageParcels) {
+      drawLandBlockOutlines(ctx, artifact, stage!.layers.land_blocks!, viewport, cssWidth, cssHeight);
     }
 
     // In final preview, draw roads after parcels so they remain legible over fills.

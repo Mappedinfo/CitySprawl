@@ -16,6 +16,7 @@ from engine.analysis import (
     generate_resource_sites,
 )
 from engine.blocks import (
+    BlockExtractionConfig,
     FrontageParcelConfig,
     classify_blocks_and_parcels,
     extract_macro_blocks,
@@ -406,6 +407,8 @@ def _generate_core_context(
         local_classic_continue_prob=roads_cfg.local_classic_continue_prob,
         local_classic_culdesac_prob=roads_cfg.local_classic_culdesac_prob,
         local_classic_max_segments_per_block=roads_cfg.local_classic_max_segments_per_block,
+        local_classic_max_road_distance_m=roads_cfg.local_classic_max_road_distance_m,
+        local_classic_depth_decay_power=roads_cfg.local_classic_depth_decay_power,
         local_community_seed_count_per_block=roads_cfg.local_community_seed_count_per_block,
         local_community_spine_prob=roads_cfg.local_community_spine_prob,
         local_arterial_setback_weight=roads_cfg.local_arterial_setback_weight,
@@ -424,6 +427,8 @@ def _generate_core_context(
         classic_culdesac_prob=roads_cfg.classic_culdesac_prob,
         classic_max_queue_size=roads_cfg.classic_max_queue_size,
         classic_max_segments=roads_cfg.classic_max_segments,
+        classic_max_arterial_distance_m=roads_cfg.classic_max_arterial_distance_m,
+        classic_depth_decay_power=roads_cfg.classic_depth_decay_power,
         slope_straight_threshold_deg=roads_cfg.slope_straight_threshold_deg,
         slope_serpentine_threshold_deg=roads_cfg.slope_serpentine_threshold_deg,
         slope_hard_limit_deg=roads_cfg.slope_hard_limit_deg,
@@ -633,6 +638,22 @@ def _build_city_artifact_from_core(
         metric_notes.append("Local generator: grid_clip")
     if local_trace_count > 0:
         metric_notes.append(f"Classic local fill traces: {local_trace_count}")
+        trace_p50 = float(metric_values.get("local_classic_trace_len_p50_m", 0.0))
+        trace_p90 = float(metric_values.get("local_classic_trace_len_p90_m", 0.0))
+        trace_p99 = float(metric_values.get("local_classic_trace_len_p99_m", 0.0))
+        if trace_p50 > 0.0:
+            metric_notes.append(
+                f"Classic local trace length (m): p50={int(round(trace_p50))}, p90={int(round(trace_p90))}, p99={int(round(trace_p99))}"
+            )
+            metric_notes.append(
+                "Classic local trace target band (500-1000m): "
+                f"{float(metric_values.get('local_classic_trace_target_band_rate', 0.0)):.2f} "
+                f"(short={float(metric_values.get('local_classic_trace_short_rate', 0.0)):.2f}, "
+                f"long={float(metric_values.get('local_classic_trace_long_rate', 0.0)):.2f})"
+            )
+            nonexc_band = float(metric_values.get("local_classic_trace_nonexception_target_band_rate", 0.0))
+            if nonexc_band > 0.0:
+                metric_notes.append(f"Classic local trace non-exception target band rate: {nonexc_band:.2f}")
     local_reroute_candidates = int(metric_values.get("local_reroute_candidate_count", 0.0))
     local_reroute_applied = int(metric_values.get("local_reroute_applied_count", 0.0))
     local_reroute_fallback = int(metric_values.get("local_reroute_fallback_count", 0.0))
@@ -647,6 +668,13 @@ def _build_city_artifact_from_core(
     if "local_two_point_edge_ratio" in metric_values:
         metric_notes.append(
             f"Local two-point edge ratio: {float(metric_values.get('local_two_point_edge_ratio', 0.0)):.2f}"
+        )
+    supplement_budget = int(metric_values.get("local_grid_supplement_budget", 0.0))
+    if supplement_budget > 0:
+        supplement_added = int(metric_values.get("local_grid_supplement_added_count", 0.0))
+        supplement_used_ratio = float(metric_values.get("local_grid_supplement_used_ratio", 0.0))
+        metric_notes.append(
+            f"Local grid supplement (budgeted): {supplement_added}/{supplement_budget} (ratio={supplement_used_ratio:.2f})"
         )
     local_cul_final = int(metric_values.get("local_culdesac_edge_count_final", 0.0))
     local_cul_pre = int(metric_values.get("local_culdesac_edge_count_pre_topology", 0.0))
@@ -738,7 +766,21 @@ def _attach_land_use_layers(
     resource_sites: Sequence[Any],
     flood_risk_preview: np.ndarray | None,
 ) -> Tuple[List[PedestrianPath], List[LandBlock], List[ParcelLot]]:
-    extraction = extract_macro_blocks(extent_m, artifact.roads, artifact.river_areas)
+    roads_cfg = config.roads
+    collector_spacing_m = float(getattr(roads_cfg, "collector_spacing_m", 420.0) or 420.0)
+    max_local_block_area_m2 = float(getattr(roads_cfg, "max_local_block_area_m2", 180000.0) or 180000.0)
+    max_block_span_m = max(220.0, min(900.0, 2.0 * collector_spacing_m))
+    max_block_area_m2 = min(max_local_block_area_m2, max_block_span_m * max_block_span_m * 0.85)
+    extraction = extract_macro_blocks(
+        extent_m,
+        artifact.roads,
+        artifact.river_areas,
+        config=BlockExtractionConfig(
+            max_block_span_m=max_block_span_m,
+            max_block_area_m2=max_block_area_m2,
+            max_block_aspect_ratio=8.0,
+        ),
+    )
     if bool(getattr(config.parcels, "enable", True)):
         parcelization = generate_frontage_parcels(
             extraction.macro_blocks,
@@ -775,6 +817,16 @@ def _attach_land_use_layers(
     artifact.pedestrian_paths = list(parcelization.pedestrian_paths)
     artifact.blocks = list(blocks)
     artifact.parcels = list(parcels)
+    notes = list(getattr(artifact.metrics, "notes", []) or [])
+    notes.extend(
+        [
+            "block_extractor:topology_fallback",
+            f"block_topology_count:{int(getattr(extraction, 'topology_block_count', 0))}",
+            f"block_fallback_count:{int(getattr(extraction, 'fallback_block_count', 0))}",
+            f"block_max_span_cap_m:{int(round(max_block_span_m))}",
+        ]
+    )
+    artifact.metrics.notes = notes
     return artifact.pedestrian_paths, artifact.blocks, artifact.parcels
 
 
