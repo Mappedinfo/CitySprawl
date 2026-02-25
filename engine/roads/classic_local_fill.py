@@ -343,6 +343,7 @@ def generate_classic_local_fill(
     accepted_trace_stop_reasons: list[str] = []
     accepted_trace_block_indices: list[int] = []
     accepted_trace_cul_flags: list[bool] = []
+    trace_stream_attempt_seq = 0
 
     step_m = max(8.0, float(cfg.local_classic_probe_step_m))
     junction_probe = max(8.0, step_m * 0.85)
@@ -363,6 +364,8 @@ def generate_classic_local_fill(
             if d_seed < max(6.0, 0.45 * float(cfg.local_classic_seed_spacing_m)):
                 continue
 
+        trace_stream_attempt_seq += 1
+        trace_stream_id = f"local-trace-{int(st.block_idx)}-{trace_stream_attempt_seq}"
         pts = [st.pos]
         prev_dir = st.direction.normalized()
         total_len = 0.0
@@ -461,6 +464,19 @@ def generate_classic_local_fill(
             pts.append(nxt)
             total_len += cur.distance_to(nxt)
             prev_dir = d
+
+            # Stream local trace growth (throttled) so frontend can show live local-road generation.
+            if (step_idx % 2) == 0:
+                _emit_stream_event(stream_cb, {
+                    "event_type": "road_trace_progress",
+                    "data": {
+                        "trace_id": trace_stream_id,
+                        "points": [{"x": p.x, "y": p.y} for p in pts],
+                        "complete": False,
+                        "road_class": "local",
+                        "culdesac": False,
+                    },
+                })
 
             end_span = start_pos.distance_to(pts[-1])
             if trace_target_enabled:
@@ -561,7 +577,7 @@ def generate_classic_local_fill(
         _emit_stream_event(stream_cb, {
             "event_type": "road_trace_progress",
             "data": {
-                "trace_id": f"local-trace-{len(traces) - 1}",
+                "trace_id": trace_stream_id,
                 "points": [{"x": p.x, "y": p.y} for p in pts],
                 "complete": True,
                 "road_class": "local",

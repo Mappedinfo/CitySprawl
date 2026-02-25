@@ -470,7 +470,16 @@ export default function App() {
       });
 
       // Draw streaming traces overlay if streaming is active
-      if (isStreaming && (streaming.state.partialTraces.size > 0 || streaming.state.completedTraces.length > 0 || streaming.state.nodes.size > 0 || streaming.state.rivers.length > 0)) {
+      if (
+        isStreaming
+        && (
+          streaming.state.partialTraces.size > 0
+          || streaming.state.completedTraces.length > 0
+          || streaming.state.polylineEdges.size > 0
+          || streaming.state.nodes.size > 0
+          || streaming.state.rivers.length > 0
+        )
+      ) {
         const extent = artifact?.terrain.extent_m ?? config.extent_m;
         drawStreamingTraces(
           ctx,
@@ -530,7 +539,13 @@ export default function App() {
 
       // Draw streaming traces overlay (read from ref to avoid dep-array thrashing)
       const sState = streamingStateRef.current;
-      if (sState.partialTraces.size > 0 || sState.completedTraces.length > 0 || sState.nodes.size > 0 || sState.rivers.length > 0) {
+      if (
+        sState.partialTraces.size > 0
+        || sState.completedTraces.length > 0
+        || sState.polylineEdges.size > 0
+        || sState.nodes.size > 0
+        || sState.rivers.length > 0
+      ) {
         const extent = artifact?.terrain.extent_m ?? config.extent_m;
         drawStreamingTraces(
           ctx,

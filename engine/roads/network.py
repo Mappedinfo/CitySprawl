@@ -952,6 +952,7 @@ def _append_line_edge(
     river_mask: np.ndarray,
     slope_penalty: float,
     river_cross_penalty: float,
+    stream_cb: Optional[RoadStreamCallback] = None,
 ) -> None:
     pts = _line_to_points(line)
     if len(pts) < 2:
@@ -968,6 +969,7 @@ def _append_line_edge(
         river_mask=river_mask,
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
+        stream_cb=stream_cb,
     )
 
 
@@ -1031,6 +1033,7 @@ def _append_polyline_edge(
     river_mask: np.ndarray,
     slope_penalty: float,
     river_cross_penalty: float,
+    stream_cb: Optional[RoadStreamCallback] = None,
 ) -> None:
     points = list(pts)
     if len(points) < 2:
@@ -1066,6 +1069,7 @@ def _append_polyline_edge(
                         river_mask=river_mask,
                         slope_penalty=slope_penalty,
                         river_cross_penalty=river_cross_penalty,
+                        stream_cb=stream_cb,
                     )
                 return
 
@@ -1099,6 +1103,18 @@ def _append_polyline_edge(
             flags=flags,
         )
     )
+    if stream_cb is not None:
+        final_edge = edges[-1]
+        _emit_stream_event(stream_cb, {
+            "event_type": "road_polyline_added",
+            "data": {
+                "id": final_edge.id,
+                "u": final_edge.u,
+                "v": final_edge.v,
+                "road_class": final_edge.road_class,
+                "path_points": [{"x": p.x, "y": p.y} for p in points],
+            },
+        })
 
 
 def _nearest_road_tangent_angle_deg(poly, nodes: Sequence[BuiltRoadNode], edges: Sequence[BuiltRoadEdge]) -> Optional[float]:
@@ -1387,6 +1403,7 @@ def _generate_hierarchy_linework(
                             river_mask=river_mask,
                             slope_penalty=slope_penalty,
                             river_cross_penalty=river_cross_penalty * 1.1,
+                            stream_cb=stream_cb,
                         )
                         collector_added += 1
                     numeric["collector_classic_trace_count"] = float(len(traces))
@@ -1425,6 +1442,7 @@ def _generate_hierarchy_linework(
                         river_mask=river_mask,
                         slope_penalty=slope_penalty,
                         river_cross_penalty=river_cross_penalty * 1.1,
+                        stream_cb=stream_cb,
                     )
                     collector_added += 1
         notes.append("collector_generator:grid_clip")
@@ -1799,6 +1817,7 @@ def _generate_hierarchy_linework(
             river_mask=river_mask,
             slope_penalty=slope_penalty * 0.8,
             river_cross_penalty=river_cross_penalty * 1.25,
+            stream_cb=stream_cb,
         )
     numeric["local_added_count"] = float(local_added)
     return notes, numeric

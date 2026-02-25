@@ -470,6 +470,7 @@ export type StreamingTraceData = {
   }>;
   nodes?: Map<string, { id: string; x: number; y: number; kind: string }>;
   edges?: Map<string, { id: string; u: string; v: string; road_class: string }>;
+  polylineEdges?: Map<string, { id: string; u: string; v: string; roadClass: string; pathPoints: Point2D[] }>;
   rivers?: Array<{ river_id: string; centerline: Point2D[]; flow: number }>;
 };
 
@@ -523,6 +524,33 @@ export function drawStreamingTraces(
       ctx.beginPath();
       ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
       ctx.fill();
+    }
+  }
+
+  // Draw finalized streamed polylines (covers grid_clip/supplement/rerouted roads that don't emit step-wise traces).
+  if (data.polylineEdges && data.polylineEdges.size > 0) {
+    for (const [, edge] of data.polylineEdges) {
+      if (!edge.pathPoints || edge.pathPoints.length < 2) continue;
+      if (edge.roadClass === 'arterial') {
+        ctx.strokeStyle = 'rgba(236, 246, 255, 0.88)';
+        ctx.lineWidth = 2.8;
+      } else if (edge.roadClass === 'collector') {
+        ctx.strokeStyle = 'rgba(194, 238, 255, 0.72)';
+        ctx.lineWidth = 1.8;
+      } else if (edge.roadClass === 'local') {
+        ctx.strokeStyle = 'rgba(136, 214, 245, 0.45)';
+        ctx.lineWidth = 1.1;
+      } else {
+        ctx.strokeStyle = 'rgba(180, 210, 240, 0.5)';
+        ctx.lineWidth = 1.2;
+      }
+      ctx.beginPath();
+      edge.pathPoints.forEach((p, i) => {
+        const s = worldToScreen(p.x, p.y, extent, cssWidth, cssHeight, viewport);
+        if (i === 0) ctx.moveTo(s.x, s.y);
+        else ctx.lineTo(s.x, s.y);
+      });
+      ctx.stroke();
     }
   }
 
@@ -580,7 +608,7 @@ export function drawStreamingTraces(
   }
 
   // Draw incremental edges (if nodes are available for lookup)
-  if (data.edges && data.edges.size > 0 && data.nodes && data.nodes.size > 0) {
+  if ((!data.polylineEdges || data.polylineEdges.size === 0) && data.edges && data.edges.size > 0 && data.nodes && data.nodes.size > 0) {
     ctx.strokeStyle = 'rgba(200, 180, 255, 0.7)';
     ctx.lineWidth = 1.5;
     for (const [, edge] of data.edges) {

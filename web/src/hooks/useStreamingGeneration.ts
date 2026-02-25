@@ -12,6 +12,10 @@ export type StreamEvent =
       data: { id: string; u: string; v: string; road_class: string; length_m?: number };
     }
   | {
+      event_type: 'road_polyline_added';
+      data: { id: string; u: string; v: string; road_class: string; path_points: Point2D[] };
+    }
+  | {
       event_type: 'road_trace_progress';
       data: {
         trace_id: string;
@@ -30,6 +34,7 @@ export type StreamEvent =
 export type IncrementalState = {
   nodes: Map<string, { id: string; x: number; y: number; kind: string }>;
   edges: Map<string, { id: string; u: string; v: string; road_class: string; length_m?: number }>;
+  polylineEdges: Map<string, { id: string; u: string; v: string; roadClass: string; pathPoints: Point2D[] }>;
   partialTraces: Map<string, Point2D[]>;
   completedTraces: Array<{ trace_id: string; points: Point2D[]; road_class?: string; culdesac?: boolean }>;
   rivers: Array<{ river_id: string; centerline: Point2D[]; flow: number }>;
@@ -47,6 +52,7 @@ function createEmptyState(): IncrementalState {
   return {
     nodes: new Map(),
     edges: new Map(),
+    polylineEdges: new Map(),
     partialTraces: new Map(),
     completedTraces: [],
     rivers: [],
@@ -65,6 +71,17 @@ function mergeEvent(state: IncrementalState, event: StreamEvent): IncrementalSta
     case 'road_edge_added':
       next.edges = new Map(state.edges);
       next.edges.set(event.data.id, event.data);
+      break;
+
+    case 'road_polyline_added':
+      next.polylineEdges = new Map(state.polylineEdges);
+      next.polylineEdges.set(event.data.id, {
+        id: event.data.id,
+        u: event.data.u,
+        v: event.data.v,
+        roadClass: event.data.road_class,
+        pathPoints: event.data.path_points,
+      });
       break;
 
     case 'road_trace_progress':
