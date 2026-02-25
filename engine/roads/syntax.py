@@ -85,10 +85,13 @@ def compute_space_syntax_edge_scores(
     edges: Sequence[object],
     *,
     choice_radius_hops: int = 10,
+    target_classes: Optional[Set[str]] = None,
 ) -> tuple[Dict[str, float], list[str]]:
     _ = choice_radius_hops  # first-pass uses global choice for simplicity
     notes: list[str] = []
-    syntax_edges = [e for e in edges if str(getattr(e, "road_class", "")) in ("arterial", "collector")]
+    # Determine which classes to score
+    score_set = set(str(c).lower() for c in target_classes) if target_classes else {"arterial", "collector"}
+    syntax_edges = [e for e in edges if str(getattr(e, "road_class", "")) in score_set]
     if not syntax_edges:
         notes.append("syntax:no_candidate_edges")
         return {}, notes
@@ -99,15 +102,19 @@ def compute_space_syntax_edge_scores(
         notes.append("syntax:degraded_no_networkx")
         return {}, notes
 
+    # Build graph from ALL motorized edges (arterial + collector + local) as routing background
     g = nx.Graph()
     for n in nodes:
         g.add_node(str(getattr(n, "id")))
-    for e in syntax_edges:
+    bg_classes = {"arterial", "collector", "local"}
+    for e in edges:
+        rc = str(getattr(e, "road_class", "")).lower()
+        if rc not in bg_classes:
+            continue
         u = str(getattr(e, "u"))
         v = str(getattr(e, "v"))
         w = float(getattr(e, "length_m", 1.0) or 1.0)
         if g.has_edge(u, v):
-            # keep shortest weight if duplicates exist
             if w < float(g[u][v].get("weight", w)):
                 g[u][v]["weight"] = w
             continue
@@ -158,9 +165,10 @@ def apply_syntax_postprocess(
         choice_radius_hops: Radius in hops for choice calculation.
         prune_low_choice_collectors: Whether to prune low-choice collectors.
         prune_quantile: Quantile threshold for pruning.
-        target_classes: Optional set of road classes to process. If None, processes
-            default classes (arterial, collector). Use {'arterial', 'collector'} for
-            Major-only processing in two-phase generation.
+        target_classes: Optional set of road classes to score and prune/adjust.
+            The betweenness graph always includes all motorized edges (arterial +
+            collector + local) as routing background, but only edges in target_classes
+            receive scores and are eligible for pruning/width changes.
     
     Returns:
         Tuple of (edges, notes, numeric).
@@ -182,7 +190,9 @@ def apply_syntax_postprocess(
     else:
         target_set = {"arterial", "collector"}  # default behavior
 
-    scores, score_notes = compute_space_syntax_edge_scores(nodes, edges, choice_radius_hops=choice_radius_hops)
+    scores, score_notes = compute_space_syntax_edge_scores(
+        nodes, edges, choice_radius_hops=choice_radius_hops, target_classes=target_set,
+    )
     notes.extend(score_notes)
     if not scores:
         return edges, notes, numeric

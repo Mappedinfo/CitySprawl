@@ -48,9 +48,17 @@ const STAGE_GUIDE_BLURBS: Record<CanonicalStageId, { zh: string; en: string }> =
     zh: '放置城市中心点与层级节点，作为道路与命名的核心锚点。',
     en: 'Place hub hierarchy points that anchor roads, labels and traffic demand.',
   },
-  roads: {
-    zh: '生成主骨架与层级道路网络，并逐步补齐连接关系。',
-    en: 'Generate arterial/collector/local hierarchy and refine network connectivity.',
+  roads_arterial: {
+    zh: '生成主干道骨架与交叉口清理，确立城市交通主骨架。',
+    en: 'Generate arterial backbone and clean intersections to establish the primary network.',
+  },
+  roads_collector: {
+    zh: '多海龟生长次干道网络，冻结主干网快照。',
+    en: 'Grow collector roads via multi-turtle expansion and freeze major network snapshot.',
+  },
+  roads_local: {
+    zh: '填充地方道路并统一运行空间句法后处理。',
+    en: 'Fill local roads and run unified space-syntax postprocessing.',
   },
   artifact: {
     zh: '封装核心城市骨架与预览产物，为后续分析阶段提供输入。',

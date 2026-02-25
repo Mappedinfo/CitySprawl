@@ -28,7 +28,9 @@ export type StreamEvent =
   | { event_type: 'progress'; data: { phase: string; progress: number; message: string } }
   | { event_type: 'stage_complete'; data: { stage_id: string } }
   | { event_type: 'terrain_milestone'; data: { stage: string; resolution?: number; extent_m?: number } }
-  | { event_type: 'river_progress'; data: { river_id: string; centerline: Point2D[]; flow: number } };
+  | { event_type: 'river_progress'; data: { river_id: string; centerline: Point2D[]; flow: number } }
+  | { event_type: 'road_phase_start'; data: { phase: 'arterial' | 'collector' | 'local' } }
+  | { event_type: 'road_phase_complete'; data: { phase: 'arterial' | 'collector' | 'local' } };
 
 // Incremental state for real-time rendering
 export type IncrementalState = {
@@ -110,6 +112,8 @@ function mergeEvent(state: IncrementalState, event: StreamEvent): IncrementalSta
     case 'progress':
     case 'stage_complete':
     case 'terrain_milestone':
+    case 'road_phase_start':
+    case 'road_phase_complete':
       break;
   }
 

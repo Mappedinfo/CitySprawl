@@ -55,7 +55,7 @@ class RoadBuildResult:
 class FrozenMajorNetwork:
     """Immutable snapshot of the Major Network (arterial + collector) after post-processing.
     
-    This is used in two-phase generation to ensure Local roads are generated based on
+    Used in the three-phase pipeline to ensure Local roads are generated based on
     the finalized Major Network geometry, avoiding the "ghost road" problem where Local
     roads attach to Collectors that are later deleted.
     """
@@ -77,6 +77,42 @@ def _emit_stream_event(stream_cb: RoadStreamCallback | None, event: Dict[str, An
         stream_cb(event)
     except Exception:
         return
+
+
+def _emit_stream_polyline_snapshot(
+    stream_cb: RoadStreamCallback | None,
+    edges: Sequence[object],
+    *,
+    road_classes: Optional[Set[str]] = None,
+) -> None:
+    """Stream existing polyline geometry so the frontend can render routed roads live."""
+    if stream_cb is None:
+        return
+    class_filter = {str(v).lower() for v in road_classes} if road_classes else None
+    for edge in edges:
+        road_class = str(getattr(edge, "road_class", "")).lower()
+        if class_filter is not None and road_class not in class_filter:
+            continue
+        pts = list(getattr(edge, "path_points", None) or [])
+        if len(pts) < 2:
+            continue
+        try:
+            path_points = [{"x": float(p.x), "y": float(p.y)} for p in pts]
+        except Exception:
+            continue
+        _emit_stream_event(
+            stream_cb,
+            {
+                "event_type": "road_polyline_added",
+                "data": {
+                    "id": str(getattr(edge, "id", "")),
+                    "u": str(getattr(edge, "u", "")),
+                    "v": str(getattr(edge, "v", "")),
+                    "road_class": road_class,
+                    "path_points": path_points,
+                },
+            },
+        )
 
 
 def _emit_road_progress(progress_cb: RoadProgressCallback | None, phase: str, progress: float, message: str) -> None:
@@ -1627,31 +1663,18 @@ def _generate_hierarchy_linework(
     river_snap_dist_m: float,
     river_parallel_bias_weight: float,
     river_avoid_weight: float,
-    tensor_grid_resolution: int,
-    tensor_step_m: float,
-    tensor_seed_spacing_m: float,
-    tensor_max_trace_len_m: float,
-    tensor_min_trace_len_m: float,
-    tensor_turn_limit_deg: float,
-    tensor_water_tangent_weight: float,
-    tensor_contour_tangent_weight: float,
-    tensor_arterial_align_weight: float,
-    tensor_hub_attract_weight: float,
-    tensor_water_influence_m: float,
-    tensor_arterial_influence_m: float,
     hubs: Optional[Sequence[HubPoint]] = None,
     river_areas: Optional[Sequence[object]] = None,
     stream_cb: Optional[RoadStreamCallback] = None,
-    generation_phase: str = "both",
+    generation_phase: str = "collector_only",
     frozen_major_network: Optional[FrozenMajorNetwork] = None,
 ) -> tuple[list[str], dict[str, float]]:
     """Generate collector and/or local road hierarchy.
     
     Args:
         generation_phase: Controls which roads to generate:
-            - "both": Generate both collector and local (default, legacy behavior)
-            - "collector_only": Only generate collector roads (for two-phase pipeline)
-            - "local_only": Only generate local roads using frozen_major_network
+            - "collector_only": Only generate collector roads (Phase 2)
+            - "local_only": Only generate local roads using frozen_major_network (Phase 3)
         frozen_major_network: Pre-computed frozen Major Network (required for "local_only" phase).
             Contains finalized arterial + collector geometry and pre-computed local blocks.
     """
@@ -1676,9 +1699,6 @@ def _generate_hierarchy_linework(
         "local_reroute_grid_supplement_applied_count": 0.0,
         "local_reroute_avg_path_points": 0.0,
         "local_reroute_avg_length_gain_ratio": 0.0,
-        "collector_tensor_enabled": 0.0,
-        "collector_tensor_degraded": 0.0,
-        "collector_tensor_trace_count": 0.0,
         "road_hierarchy_collector_ms": 0.0,
         "road_hierarchy_local_classic_ms": 0.0,
         "road_hierarchy_local_coverage_pre_ms": 0.0,
@@ -1694,9 +1714,9 @@ def _generate_hierarchy_linework(
     _ = minor_bridge_budget  # reserved for future constrained tributary bridges
 
     # Validate generation_phase parameter
-    generation_phase = str(generation_phase or "both").lower()
-    if generation_phase not in {"both", "collector_only", "local_only"}:
-        generation_phase = "both"
+    generation_phase = str(generation_phase or "collector_only").lower()
+    if generation_phase not in {"collector_only", "local_only"}:
+        generation_phase = "collector_only"
     
     # In local_only phase, frozen_major_network is required
     if generation_phase == "local_only" and frozen_major_network is None:
@@ -2879,18 +2899,6 @@ def generate_roads(
     river_snap_dist_m: float = 28.0,
     river_parallel_bias_weight: float = 1.0,
     river_avoid_weight: float = 1.2,
-    tensor_grid_resolution: int = 96,
-    tensor_step_m: float = 24.0,
-    tensor_seed_spacing_m: float = 260.0,
-    tensor_max_trace_len_m: float = 1800.0,
-    tensor_min_trace_len_m: float = 120.0,
-    tensor_turn_limit_deg: float = 38.0,
-    tensor_water_tangent_weight: float = 1.15,
-    tensor_contour_tangent_weight: float = 0.95,
-    tensor_arterial_align_weight: float = 0.70,
-    tensor_hub_attract_weight: float = 0.35,
-    tensor_water_influence_m: float = 320.0,
-    tensor_arterial_influence_m: float = 380.0,
     intersection_snap_radius_m: float = 12.0,
     intersection_t_junction_radius_m: float = 18.0,
     intersection_split_tolerance_m: float = 1.5,
@@ -2902,16 +2910,13 @@ def generate_roads(
     river_areas: Optional[Sequence[object]] = None,
     progress_cb: Optional[RoadProgressCallback] = None,
     stream_cb: Optional[RoadStreamCallback] = None,
-    use_two_phase_generation: bool = False,
 ) -> RoadBuildResult:
-    """Generate road network from hub points.
+    """Generate road network from hub points using three-phase pipeline.
     
-    Args:
-        use_two_phase_generation: If True, uses two-phase pipeline where Major roads
-            (arterial + collector) are fully processed before Local roads are generated.
-            This ensures Local roads attach to finalized Major geometry, avoiding the
-            "ghost road" problem. Default is False (legacy single-phase pipeline) until
-            two-phase pipeline is fully tested and optimized.
+    Phase 1: Arterial Backbone (MST + loops + branches) with intersection cleanup.
+    Phase 2: Collector multi-turtle growth from arterial seeds, with intersection cleanup.
+    Phase 3: Local fill within blocks carved by Major network, with intersection cleanup.
+    Post-processing: Unified space syntax, final dedupe/snap/route, street-run aggregation.
     """
     road_total_t0 = perf_counter()
     phase_ms: Dict[str, float] = {}
@@ -2921,19 +2926,6 @@ def generate_roads(
 
     def _phase_end(name: str, started_at: float) -> None:
         phase_ms[name] = float((perf_counter() - started_at) * 1000.0)
-
-    # Deprecated compatibility alias: keep accepting tensor-streamline config names while routing
-    # collector generation through the classic turtle growth backend.
-    if (collector_generator or "").lower() == "tensor_streamline":
-        classic_probe_step_m = float(tensor_step_m)
-        classic_seed_spacing_m = float(tensor_seed_spacing_m)
-        classic_max_trace_len_m = float(tensor_max_trace_len_m)
-        classic_min_trace_len_m = float(tensor_min_trace_len_m)
-        classic_turn_limit_deg = float(tensor_turn_limit_deg)
-        contour_follow_weight = float(max(contour_follow_weight, tensor_contour_tangent_weight))
-        arterial_align_weight = float(max(arterial_align_weight, tensor_arterial_align_weight))
-        hub_seek_weight = float(max(hub_seek_weight, tensor_hub_attract_weight))
-        river_parallel_bias_weight = float(max(river_parallel_bias_weight, tensor_water_tangent_weight))
 
     nodes: List[BuiltRoadNode] = [
         BuiltRoadNode(id=h.id, pos=h.pos, kind="hub", source_hub_id=h.id) for h in hubs
@@ -3081,18 +3073,6 @@ def generate_roads(
         river_snap_dist_m=river_snap_dist_m,
         river_parallel_bias_weight=river_parallel_bias_weight,
         river_avoid_weight=river_avoid_weight,
-        tensor_grid_resolution=tensor_grid_resolution,
-        tensor_step_m=tensor_step_m,
-        tensor_seed_spacing_m=tensor_seed_spacing_m,
-        tensor_max_trace_len_m=tensor_max_trace_len_m,
-        tensor_min_trace_len_m=tensor_min_trace_len_m,
-        tensor_turn_limit_deg=tensor_turn_limit_deg,
-        tensor_water_tangent_weight=tensor_water_tangent_weight,
-        tensor_contour_tangent_weight=tensor_contour_tangent_weight,
-        tensor_arterial_align_weight=tensor_arterial_align_weight,
-        tensor_hub_attract_weight=tensor_hub_attract_weight,
-        tensor_water_influence_m=tensor_water_influence_m,
-        tensor_arterial_influence_m=tensor_arterial_influence_m,
         hubs=hubs,
         river_areas=river_areas,
         stream_cb=stream_cb,
@@ -3105,166 +3085,143 @@ def generate_roads(
     syntax_notes: list[str] = []
     syntax_numeric: dict[str, float] = {}
     
-    if use_two_phase_generation:
-        # ===== TWO-PHASE PIPELINE =====
-        # Phase 1: Generate and finalize Major Network (arterial + collector)
-        hierarchy_notes.append("two_phase_generation:enabled")
-        
-        # Phase 1a: Generate Collector roads only
-        t_phase_collector = _phase_start()
-        collector_notes, collector_numeric = _generate_hierarchy_linework(
-            **hierarchy_params,
-            generation_phase="collector_only",
-        )
-        hierarchy_notes.extend(collector_notes)
-        hierarchy_numeric.update(collector_numeric)
-        _phase_end("road_phase_collector_generation_ms", t_phase_collector)
-        _emit_road_progress(progress_cb, "roads.collectors", 0.50, "Generated collector roads")
-        
-        # Phase 1b: Apply intersection operators to Major roads only
-        t_phase_major_inter = _phase_start()
-        try:
-            from engine.roads.intersections import apply_intersection_operators  # type: ignore
-        except Exception:
-            inter_notes.append("intersection_ops:degraded_unavailable")
-        else:
-            nodes, edges, major_inter_notes, major_inter_numeric = apply_intersection_operators(
-                nodes=nodes,
-                edges=edges,
-                snap_radius_m=float(intersection_snap_radius_m),
-                t_junction_radius_m=float(intersection_t_junction_radius_m),
-                split_tolerance_m=float(intersection_split_tolerance_m),
-                min_dangle_length_m=float(min_dangle_length_m),
-                target_classes={"arterial", "collector"},
-            )
-            inter_notes.extend(major_inter_notes)
-            inter_numeric.update({f"major_{k}": v for k, v in major_inter_numeric.items()})
-        _phase_end("road_phase_major_intersections_ms", t_phase_major_inter)
-        _emit_road_progress(progress_cb, "roads.major_intersections", 0.55, "Applied intersection operators to Major roads")
-        
-        # Phase 1c: Apply syntax postprocess to Major roads only
-        t_phase_major_syntax = _phase_start()
-        try:
-            from engine.roads.syntax import apply_syntax_postprocess  # type: ignore
-        except Exception:
-            syntax_notes.append("syntax:degraded_unavailable")
-        else:
-            edges, major_syntax_notes, major_syntax_numeric = apply_syntax_postprocess(
-                nodes=nodes,
-                edges=edges,
-                syntax_enable=bool(syntax_enable),
-                choice_radius_hops=int(syntax_choice_radius_hops),
-                prune_low_choice_collectors=bool(syntax_prune_low_choice_collectors),
-                prune_quantile=float(syntax_prune_quantile),
-                target_classes={"arterial", "collector"},
-            )
-            syntax_notes.extend(major_syntax_notes)
-            syntax_numeric.update({f"major_{k}": v for k, v in major_syntax_numeric.items()})
-        _phase_end("road_phase_major_syntax_ms", t_phase_major_syntax)
-        _emit_road_progress(progress_cb, "roads.major_syntax", 0.60, "Applied syntax postprocess to Major roads")
-        
-        # Phase 1d: Freeze Major Network
-        t_phase_freeze = _phase_start()
-        frozen_major = _freeze_major_network(
+    # ===== THREE-PHASE PIPELINE =====
+    hierarchy_notes.append("pipeline:three_phase")
+    
+    # --- Phase 1: Arterial intersection cleanup ---
+    _emit_stream_event(stream_cb, {"event_type": "road_phase_start", "data": {"phase": "arterial"}})
+    t_phase_art_inter = _phase_start()
+    try:
+        from engine.roads.intersections import apply_intersection_operators  # type: ignore
+    except Exception:
+        inter_notes.append("intersection_ops:degraded_unavailable")
+    else:
+        nodes, edges, art_inter_notes, art_inter_numeric = apply_intersection_operators(
             nodes=nodes,
             edges=edges,
-            extent_m=extent_m,
-            river_areas=river_areas,
-            local_spacing_m=local_spacing_m,
-            collector_spacing_m=collector_spacing_m,
-            max_local_block_area_m2=max_local_block_area_m2,
+            snap_radius_m=float(intersection_snap_radius_m),
+            t_junction_radius_m=float(intersection_t_junction_radius_m),
+            split_tolerance_m=float(intersection_split_tolerance_m),
+            min_dangle_length_m=float(min_dangle_length_m),
+            target_classes={"arterial"},
         )
-        hierarchy_notes.append(f"frozen_major_edges:{len(frozen_major.edges)}")
-        hierarchy_notes.append(f"frozen_local_blocks:{len(frozen_major.local_blocks)}")
-        _phase_end("road_phase_freeze_major_ms", t_phase_freeze)
-        _emit_road_progress(progress_cb, "roads.freeze_major", 0.62, "Froze Major Network geometry")
-        
-        # Phase 2: Generate Local roads using frozen Major Network
-        t_phase_local = _phase_start()
-        local_notes, local_numeric = _generate_hierarchy_linework(
-            **hierarchy_params,
-            generation_phase="local_only",
-            frozen_major_network=frozen_major,
-        )
-        hierarchy_notes.extend(local_notes)
-        hierarchy_numeric.update(local_numeric)
-        _phase_end("road_phase_local_generation_ms", t_phase_local)
-        _emit_road_progress(progress_cb, "roads.locals", 0.75, "Generated local roads from frozen Major")
-        
-        # Phase 2b: Apply intersection operators to Local roads only
-        t_phase_local_inter = _phase_start()
-        try:
-            from engine.roads.intersections import apply_intersection_operators  # type: ignore
-        except Exception:
-            pass  # Already noted above
-        else:
-            nodes, edges, local_inter_notes, local_inter_numeric = apply_intersection_operators(
-                nodes=nodes,
-                edges=edges,
-                snap_radius_m=float(intersection_snap_radius_m),
-                t_junction_radius_m=float(intersection_t_junction_radius_m),
-                split_tolerance_m=float(intersection_split_tolerance_m),
-                min_dangle_length_m=float(min_dangle_length_m),
-                target_classes={"local"},
-            )
-            inter_notes.extend(local_inter_notes)
-            inter_numeric.update({f"local_{k}": v for k, v in local_inter_numeric.items()})
-        _phase_end("road_phase_local_intersections_ms", t_phase_local_inter)
-        _emit_road_progress(progress_cb, "roads.local_intersections", 0.82, "Applied intersection operators to Local roads")
-        
+        inter_notes.extend(art_inter_notes)
+        inter_numeric.update({f"arterial_{k}": v for k, v in art_inter_numeric.items()})
+    # Arterials are routed before hierarchy generation, but they were not emitted as
+    # stream polylines. Re-emit current arterial geometry after cleanup so the
+    # streaming preview shows the major backbone before the final artifact arrives.
+    _emit_stream_polyline_snapshot(stream_cb, edges, road_classes={"arterial"})
+    _phase_end("road_phase_arterial_intersections_ms", t_phase_art_inter)
+    _emit_road_progress(progress_cb, "roads_arterial.intersections", 0.42, "Cleaned arterial intersections")
+    _emit_stream_event(stream_cb, {"event_type": "road_phase_complete", "data": {"phase": "arterial"}})
+    
+    # --- Phase 2: Collector generation ---
+    _emit_stream_event(stream_cb, {"event_type": "road_phase_start", "data": {"phase": "collector"}})
+    t_phase_collector = _phase_start()
+    collector_notes, collector_numeric = _generate_hierarchy_linework(
+        **hierarchy_params,
+        generation_phase="collector_only",
+    )
+    hierarchy_notes.extend(collector_notes)
+    hierarchy_numeric.update(collector_numeric)
+    _phase_end("road_phase_collector_generation_ms", t_phase_collector)
+    _emit_road_progress(progress_cb, "roads_collector.generation", 0.50, "Generated collector roads")
+    
+    # Phase 2b: Collector intersection cleanup
+    t_phase_coll_inter = _phase_start()
+    try:
+        from engine.roads.intersections import apply_intersection_operators  # type: ignore
+    except Exception:
+        pass  # Already noted above if unavailable
     else:
-        # ===== LEGACY SINGLE-PHASE PIPELINE =====
-        hierarchy_notes.append("two_phase_generation:disabled")
-        
-        # Generate both collector and local in single pass
-        legacy_notes, legacy_numeric = _generate_hierarchy_linework(
-            **hierarchy_params,
-            generation_phase="both",
+        nodes, edges, coll_inter_notes, coll_inter_numeric = apply_intersection_operators(
+            nodes=nodes,
+            edges=edges,
+            snap_radius_m=float(intersection_snap_radius_m),
+            t_junction_radius_m=float(intersection_t_junction_radius_m),
+            split_tolerance_m=float(intersection_split_tolerance_m),
+            min_dangle_length_m=float(min_dangle_length_m),
+            target_classes={"collector"},
         )
-        hierarchy_notes.extend(legacy_notes)
-        hierarchy_numeric.update(legacy_numeric)
-        _phase_end("road_phase_hierarchy_ms", t_phase)
-        _emit_road_progress(progress_cb, "roads.hierarchy", 0.72, "Generated collector and local hierarchy")
-        
-        # Apply intersection operators to all roads
-        t_phase = _phase_start()
-        try:
-            from engine.roads.intersections import apply_intersection_operators  # type: ignore
-        except Exception:
-            inter_notes.append("intersection_ops:degraded_unavailable")
-        else:
-            nodes, edges, inter_notes_legacy, inter_numeric_legacy = apply_intersection_operators(
-                nodes=nodes,
-                edges=edges,
-                snap_radius_m=float(intersection_snap_radius_m),
-                t_junction_radius_m=float(intersection_t_junction_radius_m),
-                split_tolerance_m=float(intersection_split_tolerance_m),
-                min_dangle_length_m=float(min_dangle_length_m),
-            )
-            inter_notes.extend(inter_notes_legacy)
-            inter_numeric.update(inter_numeric_legacy)
-        _phase_end("road_phase_intersections_ms", t_phase)
-        _emit_road_progress(progress_cb, "roads.intersections", 0.82, "Applied intersection operators")
-        
-        # Apply syntax postprocess to all roads
-        t_phase = _phase_start()
-        try:
-            from engine.roads.syntax import apply_syntax_postprocess  # type: ignore
-        except Exception:
-            syntax_notes.append("syntax:degraded_unavailable")
-        else:
-            edges, syntax_notes_legacy, syntax_numeric_legacy = apply_syntax_postprocess(
-                nodes=nodes,
-                edges=edges,
-                syntax_enable=bool(syntax_enable),
-                choice_radius_hops=int(syntax_choice_radius_hops),
-                prune_low_choice_collectors=bool(syntax_prune_low_choice_collectors),
-                prune_quantile=float(syntax_prune_quantile),
-            )
-            syntax_notes.extend(syntax_notes_legacy)
-            syntax_numeric.update(syntax_numeric_legacy)
-        _phase_end("road_phase_syntax_ms", t_phase)
-        _emit_road_progress(progress_cb, "roads.syntax", 0.88, "Applied space syntax postprocess")
+        inter_notes.extend(coll_inter_notes)
+        inter_numeric.update({f"collector_{k}": v for k, v in coll_inter_numeric.items()})
+    _phase_end("road_phase_collector_intersections_ms", t_phase_coll_inter)
+    _emit_road_progress(progress_cb, "roads_collector.intersections", 0.55, "Cleaned collector intersections")
+    
+    # Phase 2c: Freeze Major Network (arterial + collector)
+    t_phase_freeze = _phase_start()
+    frozen_major = _freeze_major_network(
+        nodes=nodes,
+        edges=edges,
+        extent_m=extent_m,
+        river_areas=river_areas,
+        local_spacing_m=local_spacing_m,
+        collector_spacing_m=collector_spacing_m,
+        max_local_block_area_m2=max_local_block_area_m2,
+    )
+    hierarchy_notes.append(f"frozen_major_edges:{len(frozen_major.edges)}")
+    hierarchy_notes.append(f"frozen_local_blocks:{len(frozen_major.local_blocks)}")
+    _phase_end("road_phase_freeze_major_ms", t_phase_freeze)
+    _emit_road_progress(progress_cb, "roads_collector.freeze", 0.58, "Froze Major Network geometry")
+    _emit_stream_event(stream_cb, {"event_type": "road_phase_complete", "data": {"phase": "collector"}})
+    
+    # --- Phase 3: Local generation ---
+    _emit_stream_event(stream_cb, {"event_type": "road_phase_start", "data": {"phase": "local"}})
+    t_phase_local = _phase_start()
+    local_notes, local_numeric = _generate_hierarchy_linework(
+        **hierarchy_params,
+        generation_phase="local_only",
+        frozen_major_network=frozen_major,
+    )
+    hierarchy_notes.extend(local_notes)
+    hierarchy_numeric.update(local_numeric)
+    _phase_end("road_phase_local_generation_ms", t_phase_local)
+    _emit_road_progress(progress_cb, "roads_local.generation", 0.72, "Generated local roads")
+    
+    # Phase 3b: Local intersection cleanup
+    t_phase_local_inter = _phase_start()
+    try:
+        from engine.roads.intersections import apply_intersection_operators  # type: ignore
+    except Exception:
+        pass  # Already noted above if unavailable
+    else:
+        nodes, edges, local_inter_notes, local_inter_numeric = apply_intersection_operators(
+            nodes=nodes,
+            edges=edges,
+            snap_radius_m=float(intersection_snap_radius_m),
+            t_junction_radius_m=float(intersection_t_junction_radius_m),
+            split_tolerance_m=float(intersection_split_tolerance_m),
+            min_dangle_length_m=float(min_dangle_length_m),
+            target_classes={"local"},
+        )
+        inter_notes.extend(local_inter_notes)
+        inter_numeric.update({f"local_{k}": v for k, v in local_inter_numeric.items()})
+    _phase_end("road_phase_local_intersections_ms", t_phase_local_inter)
+    _emit_road_progress(progress_cb, "roads_local.intersections", 0.78, "Cleaned local intersections")
+    _emit_stream_event(stream_cb, {"event_type": "road_phase_complete", "data": {"phase": "local"}})
+    
+    # --- Unified Syntax Postprocess ---
+    # Local edges are in the graph as background for choice centrality calculation,
+    # but only arterial + collector edges get pruned/width-emphasized.
+    t_phase_syntax = _phase_start()
+    try:
+        from engine.roads.syntax import apply_syntax_postprocess  # type: ignore
+    except Exception:
+        syntax_notes.append("syntax:degraded_unavailable")
+    else:
+        edges, syntax_notes_result, syntax_numeric_result = apply_syntax_postprocess(
+            nodes=nodes,
+            edges=edges,
+            syntax_enable=bool(syntax_enable),
+            choice_radius_hops=int(syntax_choice_radius_hops),
+            prune_low_choice_collectors=bool(syntax_prune_low_choice_collectors),
+            prune_quantile=float(syntax_prune_quantile),
+            target_classes={"arterial", "collector"},
+        )
+        syntax_notes.extend(syntax_notes_result)
+        syntax_numeric.update(syntax_numeric_result)
+    _phase_end("road_phase_syntax_ms", t_phase_syntax)
+    _emit_road_progress(progress_cb, "roads.syntax", 0.82, "Applied unified space syntax postprocess")
     t_phase = _phase_start()
     nodes, edges, extra2 = _dedupe_and_snap(nodes, edges)
     _phase_end("road_phase_dedupe_final_ms", t_phase)

@@ -5,7 +5,9 @@ export type CanonicalStageId =
   | 'terrain'
   | 'rivers'
   | 'hubs'
-  | 'roads'
+  | 'roads_arterial'
+  | 'roads_collector'
+  | 'roads_local'
   | 'artifact'
   | 'analysis'
   | 'traffic'
@@ -67,13 +69,33 @@ export const UNIFIED_STAGE_DEFS: UnifiedStageDef[] = [
     visibleLayers: ['terrain', 'rivers', 'river_areas', 'contours', 'hubs', 'labels'],
   },
   {
-    id: 'roads',
-    title: 'Roads',
-    titleZh: '道路',
-    subtitle: 'Generating road network and bridge connections',
-    subtitleZh: '生成道路网络与桥梁连接',
+    id: 'roads_arterial',
+    title: 'Arterial Roads',
+    titleZh: '主干道',
+    subtitle: 'Generating arterial backbone from hub network',
+    subtitleZh: '基于中心点网络生成主干道骨架',
     anchor: 0.36,
     timestampMs: 7200,
+    visibleLayers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'labels'],
+  },
+  {
+    id: 'roads_collector',
+    title: 'Collector Roads',
+    titleZh: '次干道',
+    subtitle: 'Growing collector network from arterial seeds',
+    subtitleZh: '从主干道种子点发散生成次干道网络',
+    anchor: 0.46,
+    timestampMs: 9200,
+    visibleLayers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'labels'],
+  },
+  {
+    id: 'roads_local',
+    title: 'Local Roads',
+    titleZh: '本地道路',
+    subtitle: 'Filling blocks with local street network',
+    subtitleZh: '在街区内填充本地道路网络',
+    anchor: 0.56,
+    timestampMs: 11200,
     visibleLayers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'labels'],
   },
   {
@@ -162,6 +184,23 @@ export const PHASE_ALIASES: Record<string, CanonicalStageId> = {
   naming: 'artifact',
   core_complete: 'artifact',
   analysis_complete: 'parcels',
+  // Map backend road phase names and legacy 'roads' stage to new sub-stages
+  roads: 'roads_arterial',
+  'roads.candidate_graph': 'roads_arterial',
+  'roads.backbone': 'roads_arterial',
+  'roads.branches': 'roads_arterial',
+  'roads.snap': 'roads_arterial',
+  'roads.route_initial': 'roads_arterial',
+  'roads_arterial.intersections': 'roads_arterial',
+  'roads_collector.generation': 'roads_collector',
+  'roads_collector.intersections': 'roads_collector',
+  'roads_collector.freeze': 'roads_collector',
+  'roads_local.generation': 'roads_local',
+  'roads_local.intersections': 'roads_local',
+  'roads.syntax': 'roads_local',
+  'roads.route_final': 'roads_local',
+  'roads.street_runs': 'roads_local',
+  'roads.done': 'roads_local',
 };
 
 type LegacyStageId = 'terrain' | 'analysis' | 'infrastructure' | 'traffic' | 'final_preview';
@@ -171,7 +210,9 @@ const LEGACY_STAGE_EXPANSION: Record<CanonicalStageId, LegacyStageId> = {
   terrain: 'terrain',
   rivers: 'terrain',
   hubs: 'infrastructure',
-  roads: 'infrastructure',
+  roads_arterial: 'infrastructure',
+  roads_collector: 'infrastructure',
+  roads_local: 'infrastructure',
   artifact: 'infrastructure',
   analysis: 'analysis',
   traffic: 'traffic',

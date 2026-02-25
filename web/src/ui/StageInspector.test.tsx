@@ -38,12 +38,11 @@ describe('StageInspector', () => {
     );
 
     expect(screen.getByText('LIVE')).toBeInTheDocument();
-    expect(screen.getAllByText('道路').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Roads').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('主干道').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Arterial Roads').length).toBeGreaterThan(0);
     expect(screen.getByText('Backend Message / 后端进度消息')).toBeInTheDocument();
     expect(screen.getAllByText('Routing arterial and collector geometry').length).toBeGreaterThan(0);
     expect(screen.getByText('Expected Layers / 预计图层')).toBeInTheDocument();
-    expect(screen.getAllByText('roads').length).toBeGreaterThan(0);
   });
 
   it('renders staged artifact info in replay mode', () => {

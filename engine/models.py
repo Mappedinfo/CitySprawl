@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -32,6 +32,15 @@ class HubsConfig(StrictModel):
 
 
 class RoadsConfig(StrictModel):
+    @model_validator(mode="before")
+    @classmethod
+    def strip_deprecated_fields(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            deprecated = [k for k in values if k.startswith("tensor_") or k == "use_two_phase_generation"]
+            for k in deprecated:
+                values.pop(k)
+        return values
+
     k_neighbors: int = Field(default=4, ge=2, le=12)
     loop_budget: int = Field(default=3, ge=0, le=64)
     branch_steps: int = Field(default=2, ge=0, le=6)
@@ -97,19 +106,6 @@ class RoadsConfig(StrictModel):
     river_snap_dist_m: float = Field(default=28.0, ge=0.0, le=500.0)
     river_parallel_bias_weight: float = Field(default=1.0, ge=0.0, le=5.0)
     river_avoid_weight: float = Field(default=1.2, ge=0.0, le=20.0)
-    # Deprecated compatibility fields for legacy tensor-streamline collector config.
-    tensor_grid_resolution: int = Field(default=96, ge=16, le=512)
-    tensor_step_m: float = Field(default=24.0, gt=1.0, le=500.0)
-    tensor_seed_spacing_m: float = Field(default=260.0, gt=5.0, le=5000.0)
-    tensor_max_trace_len_m: float = Field(default=1800.0, gt=10.0, le=50000.0)
-    tensor_min_trace_len_m: float = Field(default=120.0, gt=1.0, le=5000.0)
-    tensor_turn_limit_deg: float = Field(default=38.0, ge=1.0, le=180.0)
-    tensor_water_tangent_weight: float = Field(default=1.15, ge=0.0, le=20.0)
-    tensor_contour_tangent_weight: float = Field(default=0.95, ge=0.0, le=20.0)
-    tensor_arterial_align_weight: float = Field(default=0.70, ge=0.0, le=20.0)
-    tensor_hub_attract_weight: float = Field(default=0.35, ge=0.0, le=20.0)
-    tensor_water_influence_m: float = Field(default=320.0, gt=1.0, le=5000.0)
-    tensor_arterial_influence_m: float = Field(default=380.0, gt=1.0, le=5000.0)
     intersection_snap_radius_m: float = Field(default=12.0, ge=0.0, le=500.0)
     intersection_t_junction_radius_m: float = Field(default=18.0, ge=0.0, le=500.0)
     intersection_split_tolerance_m: float = Field(default=1.5, ge=0.0, le=100.0)

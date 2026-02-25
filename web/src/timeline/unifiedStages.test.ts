@@ -4,7 +4,7 @@ import { UNIFIED_STAGE_DEFS, getInitialPreviewStageTimestampMs } from './unified
 
 describe('getInitialPreviewStageTimestampMs', () => {
   it('returns canonical stage timestamp for known phases', () => {
-    const roadsTs = UNIFIED_STAGE_DEFS.find((s) => s.id === 'roads')?.timestampMs;
+    const roadsTs = UNIFIED_STAGE_DEFS.find((s) => s.id === 'roads_arterial')?.timestampMs;
     expect(getInitialPreviewStageTimestampMs('roads')).toBe(roadsTs);
   });
 

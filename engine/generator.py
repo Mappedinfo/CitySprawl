@@ -352,19 +352,9 @@ def _generate_core_context(
 
     roads_cfg = config.roads
     collector_generator_value = str(getattr(roads_cfg, "collector_generator", "classic_turtle"))
-    # Legacy compatibility: map legacy tensor collector parameters onto the classic collector generator
-    # when callers still request the deprecated backend name.
-    classic_probe_step_m = float(getattr(roads_cfg, "classic_probe_step_m", 24.0))
-    classic_seed_spacing_m = float(getattr(roads_cfg, "classic_seed_spacing_m", 260.0))
-    classic_max_trace_len_m = float(getattr(roads_cfg, "classic_max_trace_len_m", 1800.0))
-    classic_min_trace_len_m = float(getattr(roads_cfg, "classic_min_trace_len_m", 120.0))
-    classic_turn_limit_deg = float(getattr(roads_cfg, "classic_turn_limit_deg", 38.0))
+    # If legacy tensor_streamline was requested, silently map to classic_turtle
     if collector_generator_value.lower() == "tensor_streamline":
-        classic_probe_step_m = float(getattr(roads_cfg, "tensor_step_m", classic_probe_step_m))
-        classic_seed_spacing_m = float(getattr(roads_cfg, "tensor_seed_spacing_m", classic_seed_spacing_m))
-        classic_max_trace_len_m = float(getattr(roads_cfg, "tensor_max_trace_len_m", classic_max_trace_len_m))
-        classic_min_trace_len_m = float(getattr(roads_cfg, "tensor_min_trace_len_m", classic_min_trace_len_m))
-        classic_turn_limit_deg = float(getattr(roads_cfg, "tensor_turn_limit_deg", classic_turn_limit_deg))
+        collector_generator_value = "classic_turtle"
 
     road_progress_cb = _progress_subrange(progress_cb, 0.36, 0.78)
 
@@ -424,11 +414,11 @@ def _generate_core_context(
         minor_bridge_budget=roads_cfg.minor_bridge_budget,
         max_local_block_area_m2=roads_cfg.max_local_block_area_m2,
         collector_generator=collector_generator_value,
-        classic_probe_step_m=classic_probe_step_m,
-        classic_seed_spacing_m=classic_seed_spacing_m,
-        classic_max_trace_len_m=classic_max_trace_len_m,
-        classic_min_trace_len_m=classic_min_trace_len_m,
-        classic_turn_limit_deg=classic_turn_limit_deg,
+        classic_probe_step_m=roads_cfg.classic_probe_step_m,
+        classic_seed_spacing_m=roads_cfg.classic_seed_spacing_m,
+        classic_max_trace_len_m=roads_cfg.classic_max_trace_len_m,
+        classic_min_trace_len_m=roads_cfg.classic_min_trace_len_m,
+        classic_turn_limit_deg=roads_cfg.classic_turn_limit_deg,
         classic_branch_prob=roads_cfg.classic_branch_prob,
         classic_continue_prob=roads_cfg.classic_continue_prob,
         classic_culdesac_prob=roads_cfg.classic_culdesac_prob,
@@ -445,18 +435,6 @@ def _generate_core_context(
         river_snap_dist_m=roads_cfg.river_snap_dist_m,
         river_parallel_bias_weight=roads_cfg.river_parallel_bias_weight,
         river_avoid_weight=roads_cfg.river_avoid_weight,
-        tensor_grid_resolution=roads_cfg.tensor_grid_resolution,
-        tensor_step_m=roads_cfg.tensor_step_m,
-        tensor_seed_spacing_m=roads_cfg.tensor_seed_spacing_m,
-        tensor_max_trace_len_m=roads_cfg.tensor_max_trace_len_m,
-        tensor_min_trace_len_m=roads_cfg.tensor_min_trace_len_m,
-        tensor_turn_limit_deg=roads_cfg.tensor_turn_limit_deg,
-        tensor_water_tangent_weight=roads_cfg.tensor_water_tangent_weight,
-        tensor_contour_tangent_weight=roads_cfg.tensor_contour_tangent_weight,
-        tensor_arterial_align_weight=roads_cfg.tensor_arterial_align_weight,
-        tensor_hub_attract_weight=roads_cfg.tensor_hub_attract_weight,
-        tensor_water_influence_m=roads_cfg.tensor_water_influence_m,
-        tensor_arterial_influence_m=roads_cfg.tensor_arterial_influence_m,
         intersection_snap_radius_m=roads_cfg.intersection_snap_radius_m,
         intersection_t_junction_radius_m=roads_cfg.intersection_t_junction_radius_m,
         intersection_split_tolerance_m=roads_cfg.intersection_split_tolerance_m,
