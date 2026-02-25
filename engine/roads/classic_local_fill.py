@@ -12,6 +12,7 @@ from engine.roads.classic_growth import (
     _clamp_turn,
     _emit_stream_event,
     _flatten_segments_from_edges,
+    _iter_polyline_points,
     _nearest_hub_vector,
     _nearest_road_distance_and_projection,
     _nearest_segment_tangent,
@@ -25,6 +26,11 @@ from engine.roads.terrain_probe import TerrainProbe, TerrainProbeConfig
 @dataclass
 class LocalClassicFillConfig:
     local_spacing_m: float = 130.0
+    # Local portal seeds are precomputed on major roads (arterial+collector)
+    # so local growth visually and structurally branches from the major network.
+    local_major_seed_spacing_min_m: float = 400.0
+    local_major_seed_spacing_max_m: float = 500.0
+    local_major_seed_inset_m: float = 10.0
     # Soft target for semantic local traces (not final topology-split edges).
     local_trace_target_min_m: float = 500.0
     local_trace_target_max_m: float = 1000.0
@@ -222,6 +228,50 @@ def _quantile(vals: Sequence[float], q: float) -> float:
     return float(arr[idx])
 
 
+def _sample_polyline_point_and_tangent(points: Sequence[Vec2], dist_m: float) -> tuple[Optional[Vec2], Optional[Vec2]]:
+    if len(points) < 2:
+        return None, None
+    total = 0.0
+    for i in range(len(points) - 1):
+        a = points[i]
+        b = points[i + 1]
+        seg = Segment(a, b)
+        seg_len = seg.length()
+        if seg_len <= 1e-6:
+            continue
+        nxt_total = total + seg_len
+        if dist_m <= nxt_total + 1e-9:
+            t = max(0.0, min(1.0, (float(dist_m) - total) / max(seg_len, 1e-9)))
+            p = seg.point_at(t)
+            tan = seg.vector().normalized()
+            return p, tan
+        total = nxt_total
+    last_seg = Segment(points[-2], points[-1])
+    return points[-1], last_seg.vector().normalized()
+
+
+def _estimate_block_forward_clearance(
+    block: object,
+    start: Vec2,
+    direction: Vec2,
+    *,
+    max_dist_m: float,
+    step_m: float = 24.0,
+) -> float:
+    d = 0.0
+    u = direction.normalized()
+    if u.length() <= 1e-9:
+        return 0.0
+    step = max(6.0, float(step_m))
+    max_dist = max(0.0, float(max_dist_m))
+    while d + step <= max_dist:
+        cand = Vec2(start.x + u.x * (d + step), start.y + u.y * (d + step))
+        if not _point_in_poly_or_close(block, cand, tol=1.0):
+            break
+        d += step
+    return float(d)
+
+
 def generate_classic_local_fill(
     *,
     extent_m: float,
@@ -239,6 +289,7 @@ def generate_classic_local_fill(
     stream_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> tuple[list[list[Vec2]], list[bool], list[LocalTraceMeta], list[str], dict[str, float]]:
     rng = np.random.default_rng(int(seed) + 9203)
+    seed_rng = np.random.default_rng(int(seed) + 9217)
     probe = TerrainProbe(
         extent_m=float(extent_m),
         height=height,
@@ -280,6 +331,95 @@ def generate_classic_local_fill(
     force_continue_until_min = bool(getattr(cfg, "local_trace_force_continue_until_min", True))
     trace_cap_sum = 0.0
     trace_cap_n = 0
+    major_seed_spacing_min_m = max(180.0, float(getattr(cfg, "local_major_seed_spacing_min_m", 400.0) or 400.0))
+    major_seed_spacing_max_m = max(major_seed_spacing_min_m, float(getattr(cfg, "local_major_seed_spacing_max_m", 500.0) or 500.0))
+    major_seed_inset_m = max(4.0, float(getattr(cfg, "local_major_seed_inset_m", 10.0) or 10.0))
+    major_seed_portal_by_block: list[list[tuple[Vec2, Vec2, float]]] = [[] for _ in blocks]
+    major_seed_source_count = 0
+    fallback_centroid_seed_count = 0
+    portal_interval_samples_m: list[float] = []
+    node_lookup = {
+        str(getattr(n, "id")): Vec2(float(getattr(n, "pos").x), float(getattr(n, "pos").y))
+        for n in nodes
+        if hasattr(n, "pos")
+    }
+
+    def _add_major_portal_seed(block_idx: int, pos: Vec2, inward_dir: Vec2, clearance_m: float) -> bool:
+        if not (0 <= int(block_idx) < len(major_seed_portal_by_block)):
+            return False
+        d0 = inward_dir.normalized()
+        if d0.length() <= 1e-9:
+            return False
+        if probe.check_water_hit(pos):
+            return False
+        bucket = major_seed_portal_by_block[int(block_idx)]
+        dedupe_dist = min(260.0, max(120.0, major_seed_spacing_min_m * 0.48))
+        for ep, edir, _eclear in bucket:
+            if pos.distance_to(ep) < dedupe_dist and abs(d0.dot(edir.normalized())) > 0.6:
+                return False
+        bucket.append((pos, d0, float(max(0.0, clearance_m))))
+        return True
+
+    # Precompute local seed anchors on major roads (arterial + collector) so
+    # local roads branch from the major network instead of spawning from block edges.
+    for edge in edges:
+        rc = str(getattr(edge, "road_class", "")).lower()
+        if rc not in {"arterial", "collector"}:
+            continue
+        pts = _iter_polyline_points(edge, node_lookup)
+        if len(pts) < 2:
+            continue
+        total_len = _polyline_length(pts)
+        if total_len < max(major_seed_spacing_min_m * 0.35, 160.0):
+            continue
+
+        sample_dists: list[float] = []
+        if total_len <= major_seed_spacing_max_m * 1.35:
+            if total_len >= max(major_seed_spacing_min_m * 0.45, 180.0):
+                sample_dists = [0.5 * total_len]
+        else:
+            first = float(seed_rng.uniform(major_seed_spacing_min_m * 0.55, major_seed_spacing_max_m * 0.95))
+            d = max(0.0, min(total_len - 1e-6, first))
+            while d < total_len:
+                sample_dists.append(float(d))
+                interval = float(seed_rng.uniform(major_seed_spacing_min_m, major_seed_spacing_max_m))
+                if interval > 1e-6:
+                    portal_interval_samples_m.append(interval)
+                d += interval
+
+        for dist_m in sample_dists:
+            p, tan = _sample_polyline_point_and_tangent(pts, float(dist_m))
+            if p is None or tan is None or tan.length() <= 1e-9:
+                continue
+            left = Vec2(-tan.y, tan.x).normalized()
+            right = Vec2(tan.y, -tan.x).normalized()
+            side_candidates: list[tuple[int, Vec2, Vec2, float]] = []
+            clearance_probe_cap = max(420.0, min(float(extent_m) * 0.35, 1400.0))
+            for nrm in (left, right):
+                probe_pt = Vec2(p.x + nrm.x * major_seed_inset_m, p.y + nrm.y * major_seed_inset_m)
+                bi = _find_block_index_for_point(blocks, probe_pt, preferred_idx=-1, tol=max(1.0, major_seed_inset_m * 0.55))
+                if bi is None:
+                    continue
+                clearance = _estimate_block_forward_clearance(
+                    blocks[int(bi)],
+                    probe_pt,
+                    nrm,
+                    max_dist_m=clearance_probe_cap,
+                    step_m=max(float(cfg.local_classic_probe_step_m), 18.0),
+                )
+                side_candidates.append((int(bi), probe_pt, nrm, float(clearance)))
+            if not side_candidates:
+                continue
+            min_clearance_keep = max(160.0, local_spacing_m * 1.8)
+            best_clearance = max(float(c[3]) for c in side_candidates)
+            for bi, probe_pt, nrm, clearance in side_candidates:
+                if len(side_candidates) >= 2 and clearance < min_clearance_keep and best_clearance >= min_clearance_keep:
+                    continue
+                if clearance < max(40.0, local_spacing_m * 0.6):
+                    continue
+                if _add_major_portal_seed(int(bi), probe_pt, nrm, clearance):
+                    major_seed_source_count += 1
+
     for bi, block in enumerate(blocks):
         area = float(getattr(block, "area", 0.0) or 0.0)
         bmin, bmax = _block_dims(block)
@@ -326,42 +466,23 @@ def generate_classic_local_fill(
         if area < 2500.0:
             block_seed_counts.append(0)
             continue
-        # --- Edge-based seeding: emit seed agents from block boundary ---
-        # Instead of centroid-based seeding, place seeds along the block's
-        # exterior edges at regular intervals (local_spacing_m). Each seed
-        # fires perpendicular to the boundary edge, into the block interior.
-        seeds: list[tuple[Vec2, Vec2]] = []  # (position, inward_direction)
-        try:
-            coords = list(block.exterior.coords)
-            for i in range(len(coords) - 1):
-                p0 = Vec2(float(coords[i][0]), float(coords[i][1]))
-                p1 = Vec2(float(coords[i + 1][0]), float(coords[i + 1][1]))
-                seg_len = p0.distance_to(p1)
-                if seg_len < local_spacing_m * 0.8:
-                    continue
-                num_seeds = max(1, int(seg_len / local_spacing_m))
-                edge_dir = (p1 - p0).normalized()
-                if edge_dir.length() <= 1e-9:
-                    continue
-                # Two candidate inward normals; pick the one pointing into the block
-                normal_a = Vec2(-edge_dir.y, edge_dir.x)
-                normal_b = Vec2(edge_dir.y, -edge_dir.x)
-                for j in range(num_seeds):
-                    t = (j + 0.5) / num_seeds
-                    sp = Vec2(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t)
-                    # Probe a small distance along each normal to see which is inside
-                    probe_a = Vec2(sp.x + normal_a.x * 5.0, sp.y + normal_a.y * 5.0)
-                    probe_b = Vec2(sp.x + normal_b.x * 5.0, sp.y + normal_b.y * 5.0)
-                    if _point_in_poly_or_close(block, probe_a, tol=0.5):
-                        seeds.append((sp, normal_a))
-                    elif _point_in_poly_or_close(block, probe_b, tol=0.5):
-                        seeds.append((sp, normal_b))
-        except Exception:
-            # Fallback to centroid-based seeding
+        seeds: list[tuple[Vec2, Vec2]] = []
+        if bi < len(major_seed_portal_by_block):
+            for sp, inward, _clearance in sorted(major_seed_portal_by_block[bi], key=lambda item: -float(item[2])):
+                seeds.append((sp, inward))
+        if not seeds:
+            # Fallback for blocks with no major-road contact (e.g. residual supplement polygons):
+            # use centroid-like seeds, not boundary seeds, to preserve "grow from network inward"
+            # visuals in the primary local stage and avoid edge-to-center artifacts.
             fallback = _block_centroid_vecs(block, int(max(1, cfg.local_community_seed_count_per_block)), rng)
             major = _unit_from_angle_deg(_major_axis_angle_deg(block))
+            if major.length() <= 1e-9:
+                major = Vec2(1.0, 0.0)
             for sp in fallback:
+                if not _point_in_poly_or_close(block, sp, tol=2.0):
+                    continue
                 seeds.append((sp, major))
+                fallback_centroid_seed_count += 1
 
         added = 0
         for sp, inward_dir in seeds:
@@ -739,6 +860,10 @@ def generate_classic_local_fill(
     ]
     if contact_parts:
         notes.append("local_classic_contacts:" + ",".join(contact_parts))
+    notes.append(f"local_classic_major_portal_seeds:{int(major_seed_source_count)}")
+    if fallback_centroid_seed_count > 0:
+        notes.append(f"local_classic_fallback_centroid_seeds:{int(fallback_centroid_seed_count)}")
+    notes.append(f"local_classic_major_seed_spacing_range_m:{int(round(major_seed_spacing_min_m))}-{int(round(major_seed_spacing_max_m))}")
     notes.append(f"local_classic_trace_count:{len(traces)}")
     if trace_cap_n > 0:
         notes.append(f"local_classic_avg_trace_cap_m:{int(round(trace_cap_sum / trace_cap_n))}")
@@ -802,6 +927,16 @@ def generate_classic_local_fill(
         "local_classic_contact_parallel_count": float(contact_mode_counts.get("parallel", 0)),
         "local_classic_contact_perpendicular_continue_count": float(contact_mode_counts.get("perpendicular_continue", 0)),
         "local_classic_contact_oblique_continue_count": float(contact_mode_counts.get("oblique_continue", 0)),
+        "local_classic_major_portal_seed_count": float(major_seed_source_count),
+        "local_classic_fallback_centroid_seed_count": float(fallback_centroid_seed_count),
+        "local_classic_major_seed_spacing_target_min_m": float(major_seed_spacing_min_m),
+        "local_classic_major_seed_spacing_target_max_m": float(major_seed_spacing_max_m),
+        "local_classic_major_seed_spacing_interval_obs_min_m": (
+            float(min(portal_interval_samples_m)) if portal_interval_samples_m else 0.0
+        ),
+        "local_classic_major_seed_spacing_interval_obs_max_m": (
+            float(max(portal_interval_samples_m)) if portal_interval_samples_m else 0.0
+        ),
     }
     # Promote stop-reason diagnostics to numeric metrics so callers can track
     # coverage regressions without parsing notes strings.

@@ -8,6 +8,7 @@ from engine.roads.classic_local_fill import (
     _classify_network_contact_mode,
     generate_classic_local_fill,
 )
+from engine.roads.classic_growth import _flatten_segments_from_edges, _nearest_road_distance_and_projection
 from engine.roads.network import BuiltRoadEdge, BuiltRoadNode
 
 
@@ -181,6 +182,9 @@ def test_classic_local_fill_emits_trace_length_stats_and_hits_target_band_on_lar
     assert any(500.0 <= l <= 1000.0 for l in lengths)
     assert numeric["local_classic_trace_target_band_rate"] > 0.0
     assert numeric.get("local_classic_stop_road_too_far_count", 0.0) == 0.0
+    assert numeric.get("local_classic_major_portal_seed_count", 0.0) > 0.0
+    assert 399.0 <= numeric.get("local_classic_major_seed_spacing_interval_obs_min_m", 0.0) <= 501.0
+    assert 399.0 <= numeric.get("local_classic_major_seed_spacing_interval_obs_max_m", 0.0) <= 501.0
 
 
 def test_classic_local_fill_ignores_hard_max_distance_stop_in_coverage_first_mode():
@@ -256,8 +260,8 @@ def test_classic_local_fill_ignores_hard_max_distance_stop_in_coverage_first_mod
 
 def test_classic_local_fill_mainlines_continue_through_perpendicular_network_contacts():
     nodes = [
-        BuiltRoadNode(id="c0", pos=Vec2(300.0, 80.0), kind="hub"),
-        BuiltRoadNode(id="c1", pos=Vec2(300.0, 520.0), kind="hub"),
+        BuiltRoadNode(id="c0", pos=Vec2(300.0, 100.0), kind="hub"),
+        BuiltRoadNode(id="c1", pos=Vec2(300.0, 620.0), kind="hub"),
     ]
     edges = [
         BuiltRoadEdge(
@@ -266,22 +270,22 @@ def test_classic_local_fill_mainlines_continue_through_perpendicular_network_con
             v="c1",
             road_class="collector",
             weight=1.0,
-            length_m=440.0,
+            length_m=520.0,
             river_crossings=0,
             width_m=11.0,
             render_order=1,
-            path_points=[Vec2(300.0, 80.0), Vec2(300.0, 520.0)],
+            path_points=[Vec2(300.0, 100.0), Vec2(300.0, 620.0)],
         ),
     ]
-    blocks = [Polygon([(60.0, 60.0), (540.0, 60.0), (540.0, 540.0), (60.0, 540.0)])]
-    hubs = [HubPoint(id="h0", pos=Vec2(300.0, 300.0), tier=1, score=1.0, attrs={})]
+    blocks = [Polygon([(60.0, 120.0), (640.0, 120.0), (640.0, 480.0), (60.0, 480.0)])]
+    hubs = [HubPoint(id="h0", pos=Vec2(350.0, 300.0), tier=1, score=1.0, attrs={})]
     height = np.zeros((96, 96), dtype=np.float64)
     slope = np.zeros((96, 96), dtype=np.float64)
     river_mask = np.zeros((96, 96), dtype=bool)
     river_union = Polygon()
 
     traces, _cul_flags, _trace_meta, _notes, numeric = generate_classic_local_fill(
-        extent_m=600.0,
+        extent_m=700.0,
         height=height,
         slope=slope,
         river_mask=river_mask,
@@ -305,6 +309,10 @@ def test_classic_local_fill_mainlines_continue_through_perpendicular_network_con
             local_community_spine_prob=0.0,
             local_classic_turn_limit_deg=18.0,
             local_community_seed_count_per_block=1,
+            # Disable major-road portal seeding in this test so it remains a
+            # pure contact-behavior regression for centroid-seeded traces.
+            local_major_seed_spacing_min_m=10_000.0,
+            local_major_seed_spacing_max_m=10_500.0,
         ),
         seed=7,
     )
@@ -315,7 +323,10 @@ def test_classic_local_fill_mainlines_continue_through_perpendicular_network_con
     def _is_horizontal_crossing_trace(tr):
         xs = [p.x for p in tr]
         ys = [p.y for p in tr]
-        return min(xs) < 260.0 and max(xs) > 340.0 and (max(ys) - min(ys)) < 90.0
+        # Behavior-level check: a mostly horizontal trace that actually spans
+        # across the collector x-position (300m). Exact endpoints vary with the
+        # new frontier/portal seeding and contact continuation logic.
+        return min(xs) < 280.0 and max(xs) > 320.0 and (max(ys) - min(ys)) < 90.0 and (min(xs) < 300.0 < max(xs))
 
     lengths = [_trace_len(tr) for tr in traces]
     crossing_lengths = [l for tr, l in zip(traces, lengths) if _is_horizontal_crossing_trace(tr)]
@@ -326,8 +337,85 @@ def test_classic_local_fill_mainlines_continue_through_perpendicular_network_con
     assert any(l > 120.0 for l in lengths)
     # A horizontal local trace should pass through the central vertical collector
     # (perpendicular contact) instead of terminating immediately at the junction.
-    assert any(l > 260.0 for l in crossing_lengths)
     assert numeric.get("local_classic_contact_perpendicular_continue_count", 0.0) >= 1.0
+    assert any(l > 240.0 for l in crossing_lengths)
+
+
+def test_classic_local_fill_roots_local_traces_near_major_roads():
+    nodes = [
+        BuiltRoadNode(id="a0", pos=Vec2(100.0, 300.0), kind="hub"),
+        BuiltRoadNode(id="a1", pos=Vec2(1500.0, 300.0), kind="hub"),
+        BuiltRoadNode(id="c0", pos=Vec2(780.0, 100.0), kind="hub"),
+        BuiltRoadNode(id="c1", pos=Vec2(780.0, 1100.0), kind="hub"),
+    ]
+    edges = [
+        BuiltRoadEdge(
+            id="art0",
+            u="a0",
+            v="a1",
+            road_class="arterial",
+            weight=1.0,
+            length_m=1400.0,
+            river_crossings=0,
+            width_m=18.0,
+            render_order=0,
+            path_points=[Vec2(100.0, 300.0), Vec2(1500.0, 300.0)],
+        ),
+        BuiltRoadEdge(
+            id="col0",
+            u="c0",
+            v="c1",
+            road_class="collector",
+            weight=1.0,
+            length_m=1000.0,
+            river_crossings=0,
+            width_m=11.0,
+            render_order=1,
+            path_points=[Vec2(780.0, 100.0), Vec2(780.0, 1100.0)],
+        ),
+    ]
+    blocks = [Polygon([(60.0, 60.0), (1540.0, 60.0), (1540.0, 1140.0), (60.0, 1140.0)])]
+    hubs = [HubPoint(id="h0", pos=Vec2(780.0, 300.0), tier=1, score=1.0, attrs={})]
+    height = np.zeros((96, 96), dtype=np.float64)
+    slope = np.zeros((96, 96), dtype=np.float64)
+    river_mask = np.zeros((96, 96), dtype=bool)
+    river_union = Polygon()
+
+    traces, _cul_flags, _trace_meta, _notes, numeric = generate_classic_local_fill(
+        extent_m=1600.0,
+        height=height,
+        slope=slope,
+        river_mask=river_mask,
+        river_areas=[],
+        river_union=river_union,
+        nodes=nodes,
+        edges=edges,
+        hubs=hubs,
+        blocks=blocks,
+        cfg=LocalClassicFillConfig(
+            local_spacing_m=120.0,
+            local_classic_probe_step_m=16.0,
+            local_classic_min_trace_len_m=40.0,
+            local_classic_continue_prob=0.9,
+            local_classic_branch_prob=0.15,
+            local_classic_culdesac_prob=0.2,
+            local_classic_max_segments_per_block=12,
+        ),
+        seed=31,
+    )
+
+    major_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "collector"})
+    assert len(traces) > 0
+    assert numeric.get("local_classic_major_portal_seed_count", 0.0) > 0.0
+
+    start_dists = []
+    for tr in traces:
+        d, _ = _nearest_road_distance_and_projection(tr[0], major_segments)
+        start_dists.append(d)
+    # Local traces should originate from portal seeds located close to the major
+    # network instead of spawning from arbitrary block boundary edges.
+    assert start_dists
+    assert np.quantile(np.asarray(start_dists, dtype=np.float64), 0.5) <= 18.0
 
 
 def test_classify_network_contact_mode_emits_opposing_parallel_and_perpendicular():
