@@ -17,6 +17,7 @@ import { heightGridToImageData } from './render/terrainImage';
 import { clampScale, screenToWorld, worldToScreen, type Viewport } from './render/viewport';
 import { TerrainScene } from './render3d/TerrainScene';
 import { composeFallbackStagedResponse } from './timeline/stageComposer';
+import { UNIFIED_STAGE_DEFS, canonicalizePhaseId, normalizeStagesForUi } from './timeline/unifiedStages';
 import { useTimelinePlayer } from './timeline/useTimelinePlayer';
 import type {
   CityArtifact,
@@ -76,7 +77,7 @@ const defaultConfig: GenerateConfig = {
   naming: { provider: 'mock' },
 };
 
-const TIMELINE_TOTAL_MS = 20_000;
+const TIMELINE_TOTAL_MS = UNIFIED_STAGE_DEFS[UNIFIED_STAGE_DEFS.length - 1]?.timestampMs ?? 20_000;
 const USE_THREE_TERRAIN = true;
 
 type StageSource = 'none' | 'v2' | 'staged' | 'fallback' | 'json';
@@ -104,28 +105,12 @@ type BackendStepState = BackendStepDescriptor & {
   localProgress: number;
 };
 
-const BACKEND_PROGRESS_STEPS: BackendStepDescriptor[] = [
-  { id: 'start', title: 'Start', titleZh: '启动', anchor: 0.0 },
-  { id: 'terrain', title: 'Terrain', titleZh: '地形', anchor: 0.02 },
-  { id: 'rivers', title: 'Rivers', titleZh: '河流', anchor: 0.16 },
-  { id: 'hubs', title: 'Hubs', titleZh: '中心点', anchor: 0.28 },
-  { id: 'roads', title: 'Roads', titleZh: '道路', anchor: 0.36 },
-  { id: 'artifact', title: 'Artifact', titleZh: '骨架封装', anchor: 0.68 },
-  { id: 'analysis', title: 'Analysis', titleZh: '分析', anchor: 0.72 },
-  { id: 'buildings', title: 'Buildings', titleZh: '建筑预览', anchor: 0.80 },
-  { id: 'parcels', title: 'Parcels', titleZh: '地块/宗地', anchor: 0.90 },
-  { id: 'stages', title: 'Stages', titleZh: '阶段组装', anchor: 0.96 },
-  { id: 'done', title: 'Done', titleZh: '完成', anchor: 1.0 },
-];
-
-const BACKEND_PHASE_ALIASES: Record<string, string> = {
-  connecting: 'start',
-  queued: 'start',
-  running: 'start',
-  completed: 'done',
-  complete: 'done',
-  failed: 'done',
-};
+const BACKEND_PROGRESS_STEPS: BackendStepDescriptor[] = UNIFIED_STAGE_DEFS.map((stage) => ({
+  id: stage.id,
+  title: stage.title,
+  titleZh: stage.titleZh,
+  anchor: stage.anchor,
+}));
 
 // Default zoom multiplier for initial view - shows only part of the scene like a game
 const DEFAULT_ZOOM_MULTIPLIER = 2.2;
@@ -218,8 +203,7 @@ function clamp01(v: number): number {
 }
 
 function canonicalBackendPhase(phase: string): string {
-  const normalized = (phase || '').trim().toLowerCase();
-  return BACKEND_PHASE_ALIASES[normalized] ?? normalized;
+  return canonicalizePhaseId(phase);
 }
 
 function buildBackendStepStates(progress: GenerationProgress | null): BackendStepState[] {
@@ -271,6 +255,11 @@ function buildBackendStepStates(progress: GenerationProgress | null): BackendSte
 
 function stageLocalProgress(stages: StageArtifact[], idx: number, currentTimeMs: number, totalMs: number): number {
   const start = stages[idx]?.timestamp_ms ?? 0;
+  if (idx === stages.length - 1) {
+    if (currentTimeMs <= start) return currentTimeMs >= totalMs ? 1 : 0;
+    if (currentTimeMs >= totalMs) return 1;
+    return clamp01((currentTimeMs - start) / Math.max(totalMs - start, 1));
+  }
   const end = idx < stages.length - 1 ? (stages[idx + 1]?.timestamp_ms ?? totalMs) : totalMs;
   if (currentTimeMs <= start) return 0;
   if (currentTimeMs >= end) return 1;
@@ -315,7 +304,6 @@ export default function App() {
   });
   const [terrainBitmap, setTerrainBitmap] = useState<ImageBitmap | null>(null);
   const generateRunRef = useRef(0);
-  const autoGenerateTriggeredRef = useRef(false);
 
   // Streaming generation hook
   const streaming = useStreamingGeneration();
@@ -342,7 +330,7 @@ export default function App() {
   }, [isStreaming, streaming.progress]);
 
   const artifact: CityArtifact | null = response?.final_artifact ?? null;
-  const stages: StageArtifact[] = response?.stages ?? [];
+  const stages: StageArtifact[] = useMemo(() => normalizeStagesForUi(response?.stages ?? []), [response?.stages]);
   const hasStages = stages.length > 0;
 
   const timeline = useTimelinePlayer(stages, TIMELINE_TOTAL_MS);
@@ -351,6 +339,21 @@ export default function App() {
   const backendStepStates = useMemo(() => buildBackendStepStates(generationProgress), [generationProgress]);
   const sprawlProgressMode = hasStages && !loading && generationProgress?.status !== 'failed' ? 'progress+stages' : 'progress-only';
   const canStageClick = sprawlProgressMode === 'progress+stages';
+  const stageProgressInPrimaryBar = canStageClick && hasStages;
+  const displayGenerationProgress: GenerationProgress = generationProgress ?? {
+    jobId: 'idle',
+    status: 'idle',
+    progress: 0,
+    phase: 'idle',
+    message: 'Click Start to begin generation / 点击启动开始生成',
+    logs: [],
+  };
+  const progressPhaseLabel = stageProgressInPrimaryBar
+    ? `replay:${currentStage?.stage_id ?? 'terrain'}`
+    : canonicalizePhaseId(displayGenerationProgress.phase || 'waiting');
+  const progressMessageLabel = stageProgressInPrimaryBar
+    ? `${timeline.playing ? '展示回放中' : '展示已暂停'}，点击下方阶段可切换展示内容`
+    : (displayGenerationProgress.message || 'Waiting for backend...');
 
   const selectedHub = useMemo<HubRecord | null>(() => {
     if (!artifact || !selectedHubId) return null;
@@ -796,13 +799,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    if (autoGenerateTriggeredRef.current) return;
-    autoGenerateTriggeredRef.current = true;
-    void onGenerate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const onExport = () => {
     if (!response) return;
     const blob = new Blob([JSON.stringify(response, null, 2)], { type: 'application/json' });
@@ -908,7 +904,6 @@ export default function App() {
         selectedPreset={selectedPreset}
         onPresetChange={onPresetChange}
         onConfigChange={setConfig}
-        onGenerate={onGenerate}
         onExport={onExport}
         stagedJsonPath={stagedJsonPath}
         onStagedJsonPathChange={setStagedJsonPath}
@@ -931,42 +926,109 @@ export default function App() {
           {error ? <div className="error-banner">{error}</div> : null}
         </div>
 
-        {generationProgress ? (
-          <div className={`progress-panel hud-panel ${canStageClick ? 'progress-panel-has-stages' : ''}`}>
+        <div className={`progress-panel hud-panel ${canStageClick ? 'progress-panel-has-stages' : ''}`}>
             <div className="progress-topline">
               <span className="progress-title">Sprawl Progress</span>
-              <span className={`progress-status status-${generationProgress.status}`}>
-                {generationProgress.status}
+              <span className={`progress-status status-${displayGenerationProgress.status}`}>
+                {displayGenerationProgress.status}
               </span>
-              <span className="progress-percent">{Math.round((generationProgress.progress || 0) * 100)}%</span>
+              <span className="progress-percent">{Math.round((displayGenerationProgress.progress || 0) * 100)}%</span>
+              {stageProgressInPrimaryBar ? (
+                <span className={`timeline-auto-pill ${timeline.playing ? 'is-playing' : ''}`}>
+                  {timeline.playing ? 'AUTO' : 'PAUSED'}
+                </span>
+              ) : null}
             </div>
-            <div className="backend-step-strip" aria-label="backend step progress">
-              {backendStepStates.map((step) => (
-                <div
-                  key={step.id}
-                  className={`backend-step-item is-${step.status}`}
-                  title={`${step.titleZh} / ${step.title}`}
-                >
-                  <div className="backend-step-bead-row" aria-hidden="true">
-                    <span className="backend-step-bead" />
-                    <span className="backend-step-mini-track">
-                      <span className="backend-step-mini-fill" style={{ width: `${Math.round(step.localProgress * 100)}%` }} />
-                    </span>
-                  </div>
-                  <div className="backend-step-labels">
-                    <span className="backend-step-label-zh">{step.titleZh}</span>
-                    <span className="backend-step-label-en">{step.title}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {stageProgressInPrimaryBar ? (
+              <div className="timeline-step-rail" role="tablist" aria-label="Sprawl stage preview">
+                {stages.map((stage, idx) => {
+                  const localProgress = stageLocalProgress(stages, idx, timeline.currentTimeMs, timeline.totalMs);
+                  const isActive = idx === timeline.currentStageIndex;
+                  const isDone = idx < timeline.currentStageIndex || (idx === timeline.currentStageIndex && localProgress >= 0.999);
+                  const isReached = idx <= timeline.currentStageIndex;
+                  return (
+                    <button
+                      key={`${stage.stage_id}-${idx}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      className={[
+                        'timeline-step-button',
+                        isActive ? 'is-active' : '',
+                        isDone ? 'is-done' : '',
+                        isReached ? 'is-reached' : 'is-pending',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      onClick={() => timeline.selectStage(idx)}
+                      title={`${idx + 1}. ${stage.title_zh} (${stage.title})`}
+                    >
+                      <div className="timeline-step-bead-row" aria-hidden="true">
+                        <span className="timeline-step-bead" />
+                        <span className="timeline-step-mini-track">
+                          <span className="timeline-step-mini-fill" style={{ width: `${Math.round(localProgress * 100)}%` }} />
+                        </span>
+                      </div>
+                      <div className="timeline-step-meta">
+                        <span className="timeline-step-index">{idx + 1}</span>
+                        <span className="timeline-step-label">{stage.title_zh}</span>
+                        <span className="timeline-step-sub">{stage.title}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="backend-step-strip" aria-label="backend step progress">
+                {backendStepStates.map((step) => (
+                  step.id === 'start' ? (
+                    <button
+                      key={step.id}
+                      type="button"
+                      className={`backend-step-item backend-step-button is-${step.status} ${loading ? '' : 'is-clickable'}`}
+                      title={loading ? `${step.titleZh} / ${step.title}` : `${step.titleZh} / ${step.title} (Click to generate)`}
+                      onClick={onGenerate}
+                      disabled={loading}
+                    >
+                      <div className="backend-step-bead-row" aria-hidden="true">
+                        <span className="backend-step-bead" />
+                        <span className="backend-step-mini-track">
+                          <span className="backend-step-mini-fill" style={{ width: `${Math.round(step.localProgress * 100)}%` }} />
+                        </span>
+                      </div>
+                      <div className="backend-step-labels">
+                        <span className="backend-step-label-zh">{step.titleZh}</span>
+                        <span className="backend-step-label-en">{step.title}</span>
+                      </div>
+                    </button>
+                  ) : (
+                    <div
+                      key={step.id}
+                      className={`backend-step-item is-${step.status}`}
+                      title={`${step.titleZh} / ${step.title}`}
+                    >
+                      <div className="backend-step-bead-row" aria-hidden="true">
+                        <span className="backend-step-bead" />
+                        <span className="backend-step-mini-track">
+                          <span className="backend-step-mini-fill" style={{ width: `${Math.round(step.localProgress * 100)}%` }} />
+                        </span>
+                      </div>
+                      <div className="backend-step-labels">
+                        <span className="backend-step-label-zh">{step.titleZh}</span>
+                        <span className="backend-step-label-en">{step.title}</span>
+                      </div>
+                    </div>
+                  )
+                ))}
+              </div>
+            )}
             <div className="progress-message">
-              <code>{generationProgress.phase || 'waiting'}</code>
-              <span>{generationProgress.message || 'Waiting for backend...'}</span>
+              <code>{progressPhaseLabel}</code>
+              <span>{progressMessageLabel}</span>
             </div>
-            {generationProgress.logs.length ? (
+            {displayGenerationProgress.logs.length ? (
               <div className="progress-log-list">
-                {generationProgress.logs.slice(-6).map((log) => (
+                {displayGenerationProgress.logs.slice(-6).map((log) => (
                   <div key={`${log.seq}-${log.ts}`} className="progress-log-item">
                     <span className="progress-log-phase">{log.phase}</span>
                     <span className="progress-log-text">{log.message}</span>
@@ -975,56 +1037,7 @@ export default function App() {
               </div>
             ) : null}
 
-            {canStageClick ? (
-              <div className="sprawl-stage-section">
-                <div className="sprawl-stage-head">
-                  <span className="sprawl-stage-title">Stage Preview</span>
-                  <span className={`timeline-auto-pill ${timeline.playing ? 'is-playing' : ''}`}>
-                    {timeline.playing ? 'AUTO' : 'PAUSED'}
-                  </span>
-                </div>
-                <div className="timeline-step-rail" role="tablist" aria-label="Sprawl stage preview">
-                  {stages.map((stage, idx) => {
-                    const localProgress = stageLocalProgress(stages, idx, timeline.currentTimeMs, timeline.totalMs);
-                    const isActive = idx === timeline.currentStageIndex;
-                    const isDone = idx < timeline.currentStageIndex || (idx === timeline.currentStageIndex && localProgress >= 0.999);
-                    const isReached = idx <= timeline.currentStageIndex;
-                    return (
-                      <button
-                        key={`${stage.stage_id}-${idx}`}
-                        type="button"
-                        role="tab"
-                        aria-selected={isActive}
-                        className={[
-                          'timeline-step-button',
-                          isActive ? 'is-active' : '',
-                          isDone ? 'is-done' : '',
-                          isReached ? 'is-reached' : 'is-pending',
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                        onClick={() => timeline.selectStage(idx)}
-                        title={`${idx + 1}. ${stage.title_zh} (${stage.title})`}
-                      >
-                        <div className="timeline-step-bead-row" aria-hidden="true">
-                          <span className="timeline-step-bead" />
-                          <span className="timeline-step-mini-track">
-                            <span className="timeline-step-mini-fill" style={{ width: `${Math.round(localProgress * 100)}%` }} />
-                          </span>
-                        </div>
-                        <div className="timeline-step-meta">
-                          <span className="timeline-step-index">{idx + 1}</span>
-                          <span className="timeline-step-label">{stage.title_zh}</span>
-                          <span className="timeline-step-sub">{stage.title}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
           </div>
-        ) : null}
 
         <div
           ref={wrapperRef}

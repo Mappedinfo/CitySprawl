@@ -6,59 +6,18 @@ import type {
   StagedCityResponse,
   TrafficEdgeFlow,
 } from '../types/city';
+import { UNIFIED_STAGE_DEFS } from './unifiedStages';
 
-const STAGE_TEMPLATES: Array<Omit<StageArtifact, 'layers' | 'metrics'>> = [
-  {
-    stage_id: 'terrain',
-    title: 'Terrain Input',
-    title_zh: '地形输入',
-    subtitle: 'Complex terrain and hydrology baseline',
-    subtitle_zh: '复杂地形与水文基底',
-    timestamp_ms: 0,
-    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours'],
-    caption: { text: 'Complex terrain input', text_zh: '复杂地形输入' },
-  },
-  {
-    stage_id: 'analysis',
-    title: 'Habitable Analysis',
-    title_zh: '宜居性分析',
-    subtitle: 'Identifying habitable areas and allocating resources',
-    subtitle_zh: '识别宜居区域并配置资源',
-    timestamp_ms: 3000,
-    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours', 'analysis_heatmaps', 'resources'],
-    caption: { text: 'Identifying habitable areas', text_zh: '识别宜居区域' },
-  },
-  {
-    stage_id: 'infrastructure',
-    title: 'Infrastructure Planning',
-    title_zh: '基础设施规划',
-    subtitle: 'Road network generation and bridge placement',
-    subtitle_zh: '道路网络生成与桥梁布设',
-    timestamp_ms: 7000,
-    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'labels'],
-    caption: { text: 'Mapping infrastructure', text_zh: '基础设施规划中' },
-  },
-  {
-    stage_id: 'traffic',
-    title: 'Traffic Simulation',
-    title_zh: '交通模拟',
-    subtitle: 'OD flow assignment preview',
-    subtitle_zh: 'OD流量分配预览',
-    timestamp_ms: 11000,
-    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'traffic_heat'],
-    caption: { text: 'Simulating traffic', text_zh: '交通模拟中' },
-  },
-  {
-    stage_id: 'final_preview',
-    title: 'City Preview',
-    title_zh: '城市预览',
-    subtitle: 'Composite preview with buildings and green zones',
-    subtitle_zh: '带建筑与绿地的合成预览',
-    timestamp_ms: 15000,
-    visible_layers: ['terrain', 'rivers', 'river_areas', 'contours', 'roads', 'hubs', 'labels', 'pedestrian_paths', 'blocks', 'parcels', 'buildings', 'green_zones'],
-    caption: { text: 'High-quality city preview generated', text_zh: '高质量城市预览已生成' },
-  },
-];
+const STAGE_TEMPLATES: Array<Omit<StageArtifact, 'layers' | 'metrics'>> = UNIFIED_STAGE_DEFS.map((def) => ({
+  stage_id: def.id,
+  title: def.title,
+  title_zh: def.titleZh,
+  subtitle: def.subtitle,
+  subtitle_zh: def.subtitleZh,
+  timestamp_ms: def.timestampMs,
+  visible_layers: [...def.visibleLayers],
+  caption: { text: def.subtitle, text_zh: def.subtitleZh },
+}));
 
 function normalizeGrid(grid: number[][] | null | undefined): number[][] | undefined {
   if (!grid || !grid.length || !grid[0]?.length) return undefined;
@@ -186,6 +145,9 @@ export function composeFallbackStagedResponse(artifact: CityArtifact): StagedCit
   const traffic = pseudoTraffic(artifact);
   const buildings = pseudoBuildings(artifact);
   const green = pseudoGreenZones(artifact);
+  const isTerrainStage = new Set<StageArtifact['stage_id']>(['start', 'terrain', 'rivers']);
+  const isRoadInfraStage = new Set<StageArtifact['stage_id']>(['hubs', 'roads', 'artifact']);
+  const isFinalCompositeStage = new Set<StageArtifact['stage_id']>(['stages', 'done']);
 
   const stages: StageArtifact[] = STAGE_TEMPLATES.map((base) => {
     let layers: StageArtifact['layers'] = {
@@ -193,7 +155,7 @@ export function composeFallbackStagedResponse(artifact: CityArtifact): StagedCit
       river_area_polygons: artifact.river_areas,
     };
     let metrics: StageArtifact['metrics'] = {};
-    if (base.stage_id === 'terrain') {
+    if (isTerrainStage.has(base.stage_id)) {
       layers = {
         ...layers,
         terrain_class_preview: artifact.terrain.terrain_class_preview,
@@ -214,7 +176,25 @@ export function composeFallbackStagedResponse(artifact: CityArtifact): StagedCit
     } else if (base.stage_id === 'traffic') {
       layers = { ...layers, traffic_edge_flows: traffic };
       metrics = { max_congestion_ratio: Math.max(0, ...traffic.map((t) => t.congestion_ratio)) };
-    } else if (base.stage_id === 'final_preview') {
+    } else if (base.stage_id === 'buildings') {
+      layers = {
+        ...layers,
+        building_footprints: buildings,
+        green_zones_preview: green,
+      };
+      metrics = { building_count: buildings.length };
+    } else if (base.stage_id === 'parcels') {
+      layers = {
+        ...layers,
+        pedestrian_paths: artifact.pedestrian_paths,
+        land_blocks: artifact.blocks,
+        parcel_lots: artifact.parcels,
+      };
+      metrics = {
+        block_count: (artifact.blocks ?? []).length,
+        parcel_count: (artifact.parcels ?? []).length,
+      };
+    } else if (isFinalCompositeStage.has(base.stage_id)) {
       layers = {
         ...layers,
         pedestrian_paths: artifact.pedestrian_paths,
@@ -224,6 +204,12 @@ export function composeFallbackStagedResponse(artifact: CityArtifact): StagedCit
         green_zones_preview: green,
       };
       metrics = { building_count: buildings.length };
+    } else if (isRoadInfraStage.has(base.stage_id)) {
+      metrics = {
+        road_edge_count: artifact.metrics.road_edge_count,
+        hub_count: artifact.metrics.hub_count,
+        bridge_count: artifact.metrics.bridge_count,
+      };
     } else {
       metrics = { road_edge_count: artifact.metrics.road_edge_count };
     }

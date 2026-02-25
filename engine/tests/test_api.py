@@ -69,17 +69,25 @@ def test_generate_staged_success():
     body = res.json()
     assert body["final_artifact"]["meta"]["seed"] == 8
     assert [s["stage_id"] for s in body["stages"]] == [
+        "start",
         "terrain",
+        "rivers",
+        "hubs",
+        "roads",
+        "artifact",
         "analysis",
-        "infrastructure",
         "traffic",
-        "final_preview",
+        "buildings",
+        "parcels",
+        "stages",
+        "done",
     ]
-    assert body["stages"][0]["layers"]["terrain_class_preview"] is not None
-    assert "river_area_polygons" in body["stages"][0]["layers"]
-    assert body["stages"][3]["layers"]["traffic_edge_flows"]
-    assert "land_blocks" in body["stages"][4]["layers"]
-    assert body["stages"][1]["layers"].get("visual_envelope") is not None
+    stages_by_id = {s["stage_id"]: s for s in body["stages"]}
+    assert stages_by_id["terrain"]["layers"]["terrain_class_preview"] is not None
+    assert "river_area_polygons" in stages_by_id["terrain"]["layers"]
+    assert stages_by_id["traffic"]["layers"]["traffic_edge_flows"]
+    assert "land_blocks" in stages_by_id["done"]["layers"]
+    assert stages_by_id["analysis"]["layers"].get("visual_envelope") is not None
     assert body["final_artifact"]["metrics"]["river_coverage_ratio"] >= 0.0
 
 

@@ -126,9 +126,36 @@ def build_stages(
         'active_edges': int(sum(1 for f in traffic_edge_flows if f.flow > 0.0)),
         'max_congestion_ratio': float(max((f.congestion_ratio for f in traffic_edge_flows), default=0.0)),
     }
+    terrain_class_list = (
+        np.asarray(terrain_class_preview, dtype=np.int64).tolist()
+        if np.asarray(terrain_class_preview).size
+        else None
+    )
+    hillshade_list = _grid_to_list(hillshade_preview)
+    suitability_list = _grid_to_list(suitability_preview)
+    flood_risk_list = _grid_to_list(flood_risk_preview)
+    population_potential_list = _grid_to_list(population_potential_preview)
+    green_zones_list = _grid_to_list(green_zones_preview)
+    shared_visual_layers = StageLayersSnapshot(
+        contour_lines=list(contour_lines),
+        river_area_polygons=list(river_area_polygons),
+        visual_envelope=final_artifact.visual_envelope,
+    )
+    road_metrics = {
+        'road_edge_count': final_artifact.metrics.road_edge_count,
+        'river_count': final_artifact.metrics.river_count,
+        'hub_count': final_artifact.metrics.hub_count,
+        'bridge_count': final_artifact.metrics.bridge_count,
+    }
+    parcel_metrics = {
+        'block_count': len(land_blocks),
+        'parcel_count': len(parcel_lots),
+        'pedestrian_path_count': len(pedestrian_paths),
+    }
     final_metrics = {
         'building_count': len(building_footprints),
         'green_mean': float(np.mean(green_zones_preview)) if green_zones_preview.size else 0.0,
+        'parcel_count': len(parcel_lots),
     }
 
     for spec in STAGE_SPECS:
@@ -136,33 +163,38 @@ def build_stages(
         layers = StageLayersSnapshot()
         metrics: Dict[str, Any] = {}
 
-        if stage_id == 'terrain':
+        if stage_id in {'start', 'terrain', 'rivers'}:
             layers = StageLayersSnapshot(
-                terrain_class_preview=np.asarray(terrain_class_preview, dtype=np.int64).tolist()
-                if np.asarray(terrain_class_preview).size
-                else None,
-                hillshade_preview=_grid_to_list(hillshade_preview),
-                contour_lines=list(contour_lines),
-                river_area_polygons=list(river_area_polygons),
+                terrain_class_preview=terrain_class_list,
+                hillshade_preview=hillshade_list,
+                contour_lines=list(shared_visual_layers.contour_lines),
+                river_area_polygons=list(shared_visual_layers.river_area_polygons),
                 visual_envelope=final_artifact.visual_envelope,
             )
             metrics = {
                 'river_area_count': len(river_area_polygons),
                 'contour_count': len(contour_lines),
             }
+            if stage_id == 'start':
+                metrics['status'] = 'initializing'
+        elif stage_id in {'hubs', 'roads', 'artifact'}:
+            layers = StageLayersSnapshot(
+                contour_lines=list(shared_visual_layers.contour_lines),
+                river_area_polygons=list(shared_visual_layers.river_area_polygons),
+                visual_envelope=shared_visual_layers.visual_envelope,
+            )
+            metrics = dict(road_metrics)
         elif stage_id == 'analysis':
             layers = StageLayersSnapshot(
-                terrain_class_preview=np.asarray(terrain_class_preview, dtype=np.int64).tolist()
-                if np.asarray(terrain_class_preview).size
-                else None,
-                hillshade_preview=_grid_to_list(hillshade_preview),
-                contour_lines=list(contour_lines),
-                river_area_polygons=list(river_area_polygons),
-                suitability_preview=_grid_to_list(suitability_preview),
-                flood_risk_preview=_grid_to_list(flood_risk_preview),
-                population_potential_preview=_grid_to_list(population_potential_preview),
+                terrain_class_preview=terrain_class_list,
+                hillshade_preview=hillshade_list,
+                contour_lines=list(shared_visual_layers.contour_lines),
+                river_area_polygons=list(shared_visual_layers.river_area_polygons),
+                suitability_preview=suitability_list,
+                flood_risk_preview=flood_risk_list,
+                population_potential_preview=population_potential_list,
                 resource_sites=list(resource_sites),
-                visual_envelope=final_artifact.visual_envelope,
+                visual_envelope=shared_visual_layers.visual_envelope,
             )
             metrics = {
                 'resource_site_count': len(resource_sites),
@@ -170,37 +202,53 @@ def build_stages(
             }
         elif stage_id == 'traffic':
             layers = StageLayersSnapshot(
-                contour_lines=list(contour_lines),
-                river_area_polygons=list(river_area_polygons),
-                visual_envelope=final_artifact.visual_envelope,
+                contour_lines=list(shared_visual_layers.contour_lines),
+                river_area_polygons=list(shared_visual_layers.river_area_polygons),
+                visual_envelope=shared_visual_layers.visual_envelope,
                 traffic_edge_flows=list(traffic_edge_flows),
             )
             metrics = traffic_metrics
-        elif stage_id == 'final_preview':
+        elif stage_id == 'buildings':
             layers = StageLayersSnapshot(
-                contour_lines=list(contour_lines),
-                river_area_polygons=list(river_area_polygons),
+                contour_lines=list(shared_visual_layers.contour_lines),
+                river_area_polygons=list(shared_visual_layers.river_area_polygons),
+                building_footprints=list(building_footprints),
+                green_zones_preview=green_zones_list,
+                visual_envelope=shared_visual_layers.visual_envelope,
+            )
+            metrics = {
+                'building_count': len(building_footprints),
+                'green_mean': final_metrics['green_mean'],
+            }
+        elif stage_id == 'parcels':
+            layers = StageLayersSnapshot(
+                contour_lines=list(shared_visual_layers.contour_lines),
+                river_area_polygons=list(shared_visual_layers.river_area_polygons),
+                pedestrian_paths=list(pedestrian_paths),
+                land_blocks=list(land_blocks),
+                parcel_lots=list(parcel_lots),
+                visual_envelope=shared_visual_layers.visual_envelope,
+            )
+            metrics = parcel_metrics
+        elif stage_id in {'stages', 'done'}:
+            layers = StageLayersSnapshot(
+                contour_lines=list(shared_visual_layers.contour_lines),
+                river_area_polygons=list(shared_visual_layers.river_area_polygons),
                 pedestrian_paths=list(pedestrian_paths),
                 land_blocks=list(land_blocks),
                 parcel_lots=list(parcel_lots),
                 building_footprints=list(building_footprints),
-                green_zones_preview=_grid_to_list(green_zones_preview),
-                visual_envelope=final_artifact.visual_envelope,
+                green_zones_preview=green_zones_list,
+                visual_envelope=shared_visual_layers.visual_envelope,
             )
             metrics = final_metrics
         else:
             layers = StageLayersSnapshot(
-                contour_lines=list(contour_lines),
-                river_area_polygons=list(river_area_polygons),
-                visual_envelope=final_artifact.visual_envelope,
+                contour_lines=list(shared_visual_layers.contour_lines),
+                river_area_polygons=list(shared_visual_layers.river_area_polygons),
+                visual_envelope=shared_visual_layers.visual_envelope,
             )
-            metrics = {
-                'road_edge_count': final_artifact.metrics.road_edge_count,
-                'river_count': final_artifact.metrics.river_count,
-            }
-            if stage_id == 'infrastructure':
-                metrics['bridge_count'] = final_artifact.metrics.bridge_count
-                metrics['hub_count'] = final_artifact.metrics.hub_count
+            metrics = dict(road_metrics)
 
         stages.append(
             StageArtifact(

@@ -342,6 +342,32 @@ button:disabled {
   background: rgba(8, 12, 20, 0.42);
 }
 
+.backend-step-button {
+  width: 100%;
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.backend-step-button.is-clickable {
+  cursor: pointer;
+}
+
+.backend-step-button.is-clickable:hover {
+  border-color: rgba(108, 223, 255, 0.2);
+  background: rgba(12, 18, 28, 0.6);
+}
+
+.backend-step-button.is-clickable:focus-visible {
+  outline: 2px solid rgba(108, 223, 255, 0.45);
+  outline-offset: 1px;
+}
+
+.backend-step-button:disabled {
+  cursor: default;
+}
+
 .backend-step-item.is-active,
 .backend-step-item.is-done {
   border-color: rgba(124, 255, 188, 0.24);

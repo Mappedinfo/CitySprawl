@@ -268,7 +268,22 @@ export type StageLayersSnapshot = {
 };
 
 export type StageArtifact = {
-  stage_id: 'terrain' | 'analysis' | 'infrastructure' | 'traffic' | 'final_preview' | string;
+  stage_id:
+    | 'start'
+    | 'terrain'
+    | 'rivers'
+    | 'hubs'
+    | 'roads'
+    | 'artifact'
+    | 'analysis'
+    | 'traffic'
+    | 'buildings'
+    | 'parcels'
+    | 'stages'
+    | 'done'
+    | 'infrastructure'
+    | 'final_preview'
+    | string;
   title: string;
   title_zh: string;
   subtitle: string;

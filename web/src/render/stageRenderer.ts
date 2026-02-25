@@ -379,8 +379,8 @@ export function drawStageScene({
   const baseLayers: LayerFlags = {
     terrain: layers.terrain && (!stage || hasStageLayer(stage, 'terrain')),
     rivers: layers.rivers && (!stage || hasStageLayer(stage, 'rivers') || hasStageLayer(stage, 'river_areas')),
-    roads: layers.roads && (!stage || hasStageLayer(stage, 'roads')) && stage?.stage_id !== 'final_preview',
-    debugCandidates: layers.debugCandidates && stage?.stage_id === 'infrastructure',
+    roads: layers.roads && (!stage || hasStageLayer(stage, 'roads')) && stage?.stage_id !== 'stages' && stage?.stage_id !== 'done',
+    debugCandidates: layers.debugCandidates && stage?.stage_id === 'roads',
     showMajorRoads: layers.majorRoads,
     showLocalRoads: layers.localRoads,
     transparentBackground,
@@ -427,7 +427,7 @@ export function drawStageScene({
     }
 
     // In final preview, draw roads after parcels so they remain legible over fills.
-    if (stage?.stage_id === 'final_preview' && layers.roads && hasStageLayer(stage, 'roads')) {
+    if ((stage?.stage_id === 'stages' || stage?.stage_id === 'done') && layers.roads && hasStageLayer(stage, 'roads')) {
       drawCity(ctx, artifact, viewport, terrainBitmap, {
         terrain: false,
         rivers: false,

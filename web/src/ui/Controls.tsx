@@ -6,7 +6,6 @@ type Props = {
   selectedPreset: string;
   onPresetChange: (name: string) => void;
   onConfigChange: (next: GenerateConfig) => void;
-  onGenerate: () => void;
   onExport: () => void;
   stagedJsonPath: string;
   onStagedJsonPathChange: (next: string) => void;
@@ -58,7 +57,6 @@ export function Controls({
   selectedPreset,
   onPresetChange,
   onConfigChange,
-  onGenerate,
   onExport,
   stagedJsonPath,
   onStagedJsonPathChange,
@@ -273,9 +271,6 @@ export function Controls({
       </div>
 
       <div className="button-row">
-        <button onClick={onGenerate} disabled={loading} className="primary">
-          {loading ? 'Generating...' : 'Generate'}
-        </button>
         <button onClick={onExport}>Export JSON</button>
       </div>
 

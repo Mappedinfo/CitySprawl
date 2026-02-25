@@ -366,6 +366,13 @@ def _generate_core_context(
         classic_min_trace_len_m = float(getattr(roads_cfg, "tensor_min_trace_len_m", classic_min_trace_len_m))
         classic_turn_limit_deg = float(getattr(roads_cfg, "tensor_turn_limit_deg", classic_turn_limit_deg))
 
+    road_progress_cb = _progress_subrange(progress_cb, 0.36, 0.78)
+
+    def _road_progress_canonical(_phase: str, p: float, message: str) -> None:
+        if road_progress_cb is None:
+            return
+        road_progress_cb("roads", p, message)
+
     road_result = generate_roads(
         hubs=hub_result.hubs,
         extent_m=config.extent_m,
@@ -459,10 +466,10 @@ def _generate_core_context(
         syntax_prune_low_choice_collectors=roads_cfg.syntax_prune_low_choice_collectors,
         syntax_prune_quantile=roads_cfg.syntax_prune_quantile,
         river_areas=river_areas,
-        progress_cb=_progress_subrange(progress_cb, 0.36, 0.78),
+        progress_cb=_road_progress_canonical if road_progress_cb is not None else None,
         stream_cb=stream_cb,
     )
-    _emit_progress(progress_cb, "terrain_visuals", 0.82, "Preparing terrain previews and contours")
+    _emit_progress(progress_cb, "artifact", 0.82, "Preparing terrain previews and contours")
     terrain_visuals = compute_terrain_classification(
         height=terrain_bundle.height,
         slope=terrain_bundle.slope,
@@ -476,7 +483,7 @@ def _generate_core_context(
         max_resolution=128,
         contour_count=12,
     )
-    _emit_progress(progress_cb, "naming", 0.90, "Assigning place names")
+    _emit_progress(progress_cb, "artifact", 0.90, "Assigning place names")
 
     provider = get_toponymy_provider(config.naming.provider)
     road_edges_for_naming = [
@@ -486,7 +493,7 @@ def _generate_core_context(
     names = assign_hub_names(hub_result.hubs, road_edges_for_naming, provider, config.seed)
     name_map = {hub.id: names[i] for i, hub in enumerate(hub_result.hubs)}
 
-    _emit_progress(progress_cb, "core_complete", 1.0, "Core infrastructure generation complete")
+    _emit_progress(progress_cb, "artifact", 1.0, "Core infrastructure generation complete")
     return _CoreGenerationContext(
         terrain_bundle=terrain_bundle,
         hub_result=hub_result,
@@ -880,6 +887,7 @@ def _build_analysis_and_land_layers(
         extent_m=config.extent_m,
     )
 
+    _emit_progress(progress_cb, "traffic", 0.30, "Assigning traffic flows")
     traffic_result = assign_edge_flows(artifact.hubs, artifact.roads)
     _emit_progress(progress_cb, "buildings", 0.42, "Generating buildings and green zones previews")
     building_footprints = generate_building_footprints(
@@ -904,7 +912,7 @@ def _build_analysis_and_land_layers(
     )
     _emit_progress(progress_cb, "parcels", 0.90, "Classifying blocks and parcels")
     _refresh_final_metrics(artifact, config)
-    _emit_progress(progress_cb, "analysis_complete", 1.0, "Analysis and land layers complete")
+    _emit_progress(progress_cb, "parcels", 1.0, "Analysis and land layers complete")
 
     return _AnalysisAndLandLayers(
         analysis=analysis,

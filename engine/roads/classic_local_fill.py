@@ -493,13 +493,14 @@ def generate_classic_local_fill(
             # Trigger branch evaluation when the trace crosses a grid interval
             # (local_spacing_m). This produces regular T/cross intersections
             # instead of the old random step-based branching.
-            current_grid_idx = int(total_len / local_spacing_m)
-            prev_grid_idx = int((total_len - step_m) / local_spacing_m)
+            prev_len = total_len - step_m
+            grid_crossed = int(total_len / local_spacing_m) > int(prev_len / local_spacing_m)
 
-            if current_grid_idx > prev_grid_idx and st.depth < 6:
-                bp = float(cfg.local_classic_branch_prob)
+            if grid_crossed and st.depth < 5:
+                # Slightly suppress branching urge so traces can span further before fractalizing.
+                bp = float(cfg.local_classic_branch_prob) * 0.8
                 if slope_deg > float(cfg.slope_serpentine_threshold_deg):
-                    bp *= 0.8
+                    bp *= 0.5
                 depth_decay = max(0.0, (1.0 - float(st.depth) / 6.0)) ** float(cfg.local_classic_depth_decay_power)
                 bp *= depth_decay
                 if max_road_dist > 0.0 and (arterial_segments or collector_segments):
@@ -508,20 +509,20 @@ def generate_classic_local_fill(
                         dist_ratio = min(1.0, d_branch_check / max_road_dist)
                         bp *= max(0.1, 1.0 - dist_ratio)
                 if rng.random() < bp:
-                    # 40% cross intersection (both sides), 60% T intersection (one side)
-                    if rng.random() < 0.40:
+                    # Urban morphology heuristic: mostly T-junctions, fewer 4-way crosses.
+                    if rng.random() < 0.30:
                         signs = [-1.0, 1.0]
                     else:
                         signs = [1.0 if rng.random() < 0.5 else -1.0]
                     for sign in signs:
-                        # Near-orthogonal branch with tiny random perturbation
-                        bdir = _turn_vec(d, sign * float(rng.uniform(88.0, 92.0)))
+                        # Strong orthogonal constraint to avoid chaotic branch angles.
+                        bdir = _turn_vec(d, sign * float(rng.uniform(86.0, 94.0)))
                         if bdir.length() <= 1e-9:
                             continue
                         heapq.heappush(
                             queue,
                             _State(
-                                priority=float(st.depth + 1) + float(rng.uniform(0.0, 0.2)),
+                                priority=float(st.depth + 1) + float(rng.uniform(0.0, 0.4)),
                                 pos=nxt,
                                 direction=bdir,
                                 block_idx=st.block_idx,
@@ -545,10 +546,10 @@ def generate_classic_local_fill(
                         local_cont_prob *= max(0.35, 1.0 - (trace_ratio - 0.75) / 0.65)
                 # Lifespan protection: ensure local roads survive long enough
                 # to cross a typical block (~150m) before stochastic termination.
-                safe_length = max(local_spacing_m * 1.5, 150.0)
+                safe_length = max(local_spacing_m * 1.8, 200.0)
                 if total_len < safe_length:
                     progress = total_len / safe_length
-                    local_cont_prob = max(local_cont_prob, 0.98 - 0.28 * progress)
+                    local_cont_prob = max(local_cont_prob, 0.98 - 0.20 * progress)
                 if rng.random() > local_cont_prob:
                     cul = rng.random() < float(cfg.local_classic_culdesac_prob)
                     reason = "stochastic_stop"
