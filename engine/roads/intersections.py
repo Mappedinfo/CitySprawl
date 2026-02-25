@@ -194,7 +194,7 @@ def snap_endpoints_to_nodes(
         anchors.append((str(getattr(n, "id")), Vec2(float(pos.x), float(pos.y)), str(getattr(n, "kind", ""))))
 
     for ei, edge in enumerate(edges):
-        if str(getattr(edge, "road_class", "")) != "collector":
+        if str(getattr(edge, "road_class", "")) not in ("collector", "local"):
             continue
         path = _edge_points(edge, node_lookup)
         if len(path) < 2:
@@ -326,7 +326,7 @@ def snap_endpoints_to_segments_create_t_junctions(
     split_targets = 0
 
     for ei, edge in enumerate(list(edges)):
-        if str(getattr(edge, "road_class", "")) != "collector":
+        if str(getattr(edge, "road_class", "")) not in ("collector", "local"):
             continue
         path = _edge_points(edge, node_lookup)
         if len(path) < 2:
@@ -401,7 +401,7 @@ def split_crossings(
 
     for edge in edges:
         rc = str(getattr(edge, "road_class", ""))
-        if rc not in ("arterial", "collector"):
+        if rc not in ("arterial", "collector", "local"):
             continue
         pts = _edge_points(edge, node_lookup)
         segs = _segmentize_polyline(pts)
@@ -475,7 +475,7 @@ def prune_short_dangles(
     kept: list[object] = []
     pruned = 0
     for e in edges:
-        if str(getattr(e, "road_class", "")) != "collector":
+        if str(getattr(e, "road_class", "")) not in ("collector", "local"):
             kept.append(e)
             continue
         if "culdesac" in _edge_flags(e) or "-cul" in str(getattr(e, "id", "")):

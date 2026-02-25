@@ -411,25 +411,9 @@ def generate_classic_local_fill(
                     break
 
             d_net, proj_net = _nearest_road_distance_and_projection(nxt, base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
-            if d_net < junction_probe and proj_net is not None and total_len >= max(12.0, step_m):
-                if trace_target_enabled and total_len < trace_target_min_this:
-                    # Before the trace reaches the semantic target minimum, avoid terminating early just
-                    # because we touched the evolving local network. Prefer long semantic runs first.
-                    # In the very early phase, ignore all network snaps; later, allow high-order snaps.
-                    if total_len < trace_target_min_this * 0.7:
-                        d_net = float("inf")
-                        proj_net = None
-                    else:
-                        d_high, proj_high = (
-                            _nearest_road_distance_and_projection(nxt, higher_order_segments)
-                            if higher_order_segments
-                            else (float("inf"), None)
-                        )
-                        if not (d_high < junction_probe and proj_high is not None):
-                            d_net = float("inf")
-                            proj_net = None
-                        else:
-                            d_net, proj_net = d_high, proj_high
+            # FIX: Removed trace_target_enabled logic that forced d_net=inf to prevent
+            # early termination. Now local roads snap to network as soon as they touch it,
+            # enabling proper grid closure and block formation.
             if d_net < junction_probe and proj_net is not None and total_len >= max(12.0, step_m):
                 if _point_in_poly_or_close(block, proj_net, tol=1.0) and proj_net.distance_to(cur) > 1.5:
                     pts.append(proj_net)
@@ -474,12 +458,8 @@ def generate_classic_local_fill(
                     if d_branch_check > 0.4 * max_road_dist:
                         dist_ratio = min(1.0, d_branch_check / max_road_dist)
                         bp *= max(0.1, 1.0 - dist_ratio)
-                if trace_target_enabled:
-                    if total_len < trace_target_min_this:
-                        # Prefer extending the primary trace before fragmenting the block.
-                        bp *= max(0.10, 0.35 + 0.35 * (total_len / max(trace_target_min_this, 1e-6)))
-                    elif total_len > trace_target_max_this:
-                        bp *= 0.25
+                # FIX: Removed trace_target_enabled branch suppression that prevented
+                # early branching. Now branches can form at normal rates for grid generation.
                 if rng.random() < bp:
                     for sign in (-1.0, 1.0):
                         if rng.random() > (0.55 if sign < 0 else 0.75):
@@ -506,16 +486,9 @@ def generate_classic_local_fill(
                     trace_ratio = min(1.4, total_len / max(trace_len_cap, 1e-6))
                     if trace_ratio > 0.75:
                         local_cont_prob *= max(0.35, 1.0 - (trace_ratio - 0.75) / 0.65)
-                if trace_target_enabled:
-                    if force_continue_until_min and total_len < trace_target_min_this:
-                        progress_to_min = min(1.0, total_len / max(trace_target_min_this, 1e-6))
-                        local_cont_prob = max(local_cont_prob, 0.94 + 0.05 * (1.0 - progress_to_min))
-                    elif total_len > trace_target_max_this:
-                        over_ratio = min(
-                            1.0,
-                            max(0.0, (total_len - trace_target_max_this) / max(trace_soft_cap_this - trace_target_max_this, 1e-6)),
-                        )
-                        local_cont_prob *= max(0.04, 1.0 - 0.92 * over_ratio)
+                # FIX: Removed trace_target_enabled forced continuation logic that
+                # prevented roads from stopping naturally. Now roads can terminate
+                # when they should, enabling proper grid closure.
                 if rng.random() > local_cont_prob:
                     cul = rng.random() < float(cfg.local_classic_culdesac_prob)
                     reason = "stochastic_stop"
