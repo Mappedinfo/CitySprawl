@@ -7,7 +7,6 @@ import { worldToScreen, type Viewport } from './viewport';
 export type LayerToggles = {
   terrain: boolean;
   rivers: boolean;
-  roads: boolean;
   majorRoads: boolean;
   localRoads: boolean;
   contours: boolean;
@@ -362,14 +361,17 @@ export function drawStageScene({
   cssWidth,
   cssHeight,
 }: Params): void {
+  const roadNetworkEnabled = layers.majorRoads || layers.localRoads || layers.pedestrianPaths;
+
   if (!artifact) {
     drawCity(ctx, artifact, viewport, terrainBitmap, {
       terrain: false,
       rivers: false,
-      roads: false,
+      roads: roadNetworkEnabled,
       debugCandidates: false,
       showMajorRoads: layers.majorRoads,
       showLocalRoads: layers.localRoads,
+      showPedestrianRoads: layers.pedestrianPaths,
       cssWidth,
       cssHeight,
     });
@@ -379,10 +381,11 @@ export function drawStageScene({
   const baseLayers: LayerFlags = {
     terrain: layers.terrain && (!stage || hasStageLayer(stage, 'terrain')),
     rivers: layers.rivers && (!stage || hasStageLayer(stage, 'rivers') || hasStageLayer(stage, 'river_areas')),
-    roads: layers.roads && (!stage || hasStageLayer(stage, 'roads')) && stage?.stage_id !== 'stages' && stage?.stage_id !== 'done',
+    roads: roadNetworkEnabled && (!stage || hasStageLayer(stage, 'roads')) && stage?.stage_id !== 'stages' && stage?.stage_id !== 'done',
     debugCandidates: layers.debugCandidates && stage?.stage_id === 'roads',
     showMajorRoads: layers.majorRoads,
     showLocalRoads: layers.localRoads,
+    showPedestrianRoads: layers.pedestrianPaths,
     transparentBackground,
     cssWidth,
     cssHeight,
@@ -427,7 +430,7 @@ export function drawStageScene({
     }
 
     // In final preview, draw roads after parcels so they remain legible over fills.
-    if ((stage?.stage_id === 'stages' || stage?.stage_id === 'done') && layers.roads && hasStageLayer(stage, 'roads')) {
+    if ((stage?.stage_id === 'stages' || stage?.stage_id === 'done') && roadNetworkEnabled && hasStageLayer(stage, 'roads')) {
       drawCity(ctx, artifact, viewport, terrainBitmap, {
         terrain: false,
         rivers: false,
@@ -435,6 +438,7 @@ export function drawStageScene({
         debugCandidates: false,
         showMajorRoads: layers.majorRoads,
         showLocalRoads: layers.localRoads,
+        showPedestrianRoads: layers.pedestrianPaths,
         transparentBackground: true,
         preserveCanvas: true,
         cssWidth,

@@ -287,7 +287,6 @@ export default function App() {
   const [layers, setLayers] = useState<LayerState>({
     terrain: true,
     rivers: true,
-    roads: true,
     majorRoads: true,
     localRoads: true,
     contours: true,

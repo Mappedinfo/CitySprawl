@@ -14,7 +14,6 @@ type Props = {
   layers: {
     terrain: boolean;
     rivers: boolean;
-    roads: boolean;
     majorRoads: boolean;
     localRoads: boolean;
     contours: boolean;
@@ -47,7 +46,6 @@ type LayerGroupDef = {
 const LAYER_LABELS: Record<LayerKey, string> = {
   terrain: 'Terrain',
   rivers: 'Rivers',
-  roads: 'Roads',
   majorRoads: 'Major Roads',
   localRoads: 'Local Roads',
   contours: 'Contours',
@@ -78,9 +76,8 @@ const LAYER_GROUPS: LayerGroupDef[] = [
     id: 'line',
     label: 'Line / 线',
     items: [
-      { key: 'roads' },
-      { key: 'majorRoads', indent: 1 },
-      { key: 'localRoads', indent: 1 },
+      { key: 'majorRoads' },
+      { key: 'localRoads' },
       { key: 'pedestrianPaths' },
       { key: 'debugCandidates' },
       { key: 'traffic' },
@@ -108,7 +105,7 @@ function warnIfLayerGroupCoverageMismatch(layers: Props['layers']): void {
   }
 
   const missingKeys = actualKeys.filter((key) => !groupedSet.has(key));
-  const extraKeys = GROUPED_LAYER_KEYS.filter((key) => !(key in layers));
+  const extraKeys = GROUPED_LAYER_KEYS.filter((key) => !actualKeys.includes(key));
   if (!missingKeys.length && !extraKeys.length && !duplicateKeys.length) return;
 
   layerConfigMismatchWarned = true;

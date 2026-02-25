@@ -67,7 +67,6 @@ function renderControls(overrides: Partial<ComponentProps<typeof Controls>> = {}
     layers: {
       terrain: true,
       rivers: true,
-      roads: true,
       majorRoads: true,
       localRoads: true,
       contours: true,
@@ -117,7 +116,6 @@ describe('Controls layers groups', () => {
       'Parcels',
       'Buildings',
       'Green Zones',
-      'Roads',
       'Major Roads',
       'Local Roads',
       'Ped Paths',
@@ -132,23 +130,21 @@ describe('Controls layers groups', () => {
     }
   });
 
-  it('keeps road hierarchy inside the line group and marks major/local as child items', () => {
+  it('shows line-layer road toggles without the hidden unified roads switch', () => {
     renderControls();
     const layersSection = getLayersSection();
     const lineGroup = layersSection.querySelector('[data-layer-group="line"]');
     expect(lineGroup).not.toBeNull();
     const scoped = within(lineGroup as HTMLElement);
 
-    const roadsItem = scoped.getByLabelText('Roads').closest('.layer-item');
     const majorRoadsItem = scoped.getByLabelText('Major Roads').closest('.layer-item');
     const localRoadsItem = scoped.getByLabelText('Local Roads').closest('.layer-item');
 
-    expect(roadsItem).toBeInTheDocument();
+    expect(scoped.queryByLabelText('Roads')).not.toBeInTheDocument();
     expect(majorRoadsItem).toBeInTheDocument();
     expect(localRoadsItem).toBeInTheDocument();
-    expect(roadsItem).not.toHaveClass('is-child');
-    expect(majorRoadsItem).toHaveClass('is-child');
-    expect(localRoadsItem).toHaveClass('is-child');
+    expect(majorRoadsItem).not.toHaveClass('is-child');
+    expect(localRoadsItem).not.toHaveClass('is-child');
   });
 
   it('calls onLayerToggle with the correct key when toggling a grouped layer', async () => {
