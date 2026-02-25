@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 from collections import defaultdict
-from typing import Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 import numpy as np
 
 from engine.core.geometry import Segment, Vec2, segment_intersection
 from engine.roads.classic_growth import (
     _clamp_turn,
+    _emit_stream_event,
     _flatten_segments_from_edges,
     _nearest_hub_vector,
     _nearest_road_distance_and_projection,
@@ -189,6 +190,7 @@ def generate_classic_local_fill(
     blocks: Sequence[object],
     cfg: LocalClassicFillConfig,
     seed: int,
+    stream_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> tuple[list[list[Vec2]], list[bool], list[LocalTraceMeta], list[str], dict[str, float]]:
     rng = np.random.default_rng(int(seed) + 9203)
     probe = TerrainProbe(
@@ -278,27 +280,55 @@ def generate_classic_local_fill(
         if area < 2500.0:
             block_seed_counts.append(0)
             continue
-        seeds = _block_centroid_vecs(block, int(max(1, cfg.local_community_seed_count_per_block)), rng)
-        major = _unit_from_angle_deg(_major_axis_angle_deg(block))
+        # --- Edge-based seeding: emit seed agents from block boundary ---
+        # Instead of centroid-based seeding, place seeds along the block's
+        # exterior edges at regular intervals (local_spacing_m). Each seed
+        # fires perpendicular to the boundary edge, into the block interior.
+        seeds: list[tuple[Vec2, Vec2]] = []  # (position, inward_direction)
+        try:
+            coords = list(block.exterior.coords)
+            for i in range(len(coords) - 1):
+                p0 = Vec2(float(coords[i][0]), float(coords[i][1]))
+                p1 = Vec2(float(coords[i + 1][0]), float(coords[i + 1][1]))
+                seg_len = p0.distance_to(p1)
+                if seg_len < local_spacing_m * 0.8:
+                    continue
+                num_seeds = max(1, int(seg_len / local_spacing_m))
+                edge_dir = (p1 - p0).normalized()
+                if edge_dir.length() <= 1e-9:
+                    continue
+                # Two candidate inward normals; pick the one pointing into the block
+                normal_a = Vec2(-edge_dir.y, edge_dir.x)
+                normal_b = Vec2(edge_dir.y, -edge_dir.x)
+                for j in range(num_seeds):
+                    t = (j + 0.5) / num_seeds
+                    sp = Vec2(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t)
+                    # Probe a small distance along each normal to see which is inside
+                    probe_a = Vec2(sp.x + normal_a.x * 5.0, sp.y + normal_a.y * 5.0)
+                    probe_b = Vec2(sp.x + normal_b.x * 5.0, sp.y + normal_b.y * 5.0)
+                    if _point_in_poly_or_close(block, probe_a, tol=0.5):
+                        seeds.append((sp, normal_a))
+                    elif _point_in_poly_or_close(block, probe_b, tol=0.5):
+                        seeds.append((sp, normal_b))
+        except Exception:
+            # Fallback to centroid-based seeding
+            fallback = _block_centroid_vecs(block, int(max(1, cfg.local_community_seed_count_per_block)), rng)
+            major = _unit_from_angle_deg(_major_axis_angle_deg(block))
+            for sp in fallback:
+                seeds.append((sp, major))
+
         added = 0
-        for sp in seeds:
-            if not _point_in_poly_or_close(block, sp, tol=1.0):
+        for sp, inward_dir in seeds:
+            if not _point_in_poly_or_close(block, sp, tol=2.0):
                 continue
             if probe.check_water_hit(sp):
                 continue
-            tan_col, d_col = _nearest_segment_tangent(sp, collector_segments)
-            tan_art, d_art = _nearest_segment_tangent(sp, arterial_segments)
-            base = tan_col or tan_art or major or _nearest_hub_vector(sp, hubs) or Vec2(1.0, 0.0)
-            # Follow collector if close; otherwise orient by block major axis with stronger curvature later.
-            if tan_col is not None and d_col < 160.0:
-                base = tan_col if rng.random() < float(cfg.local_community_spine_prob) else _turn_vec(tan_col, 90.0 if rng.random() < 0.5 else -90.0)
-            elif tan_art is not None and d_art < 200.0:
-                perp = _turn_vec(tan_art, 90.0 if rng.random() < 0.5 else -90.0)
-                base = tan_art if rng.random() < 0.25 else perp
-            d0 = _turn_vec(base, float(rng.uniform(-32.0, 32.0)))
+            # Use the inward perpendicular direction directly
+            d0 = inward_dir.normalized()
+            if d0.length() <= 1e-9:
+                continue
             heapq.heappush(queue, _State(priority=float(rng.uniform(0.0, 0.8)), pos=sp, direction=d0, block_idx=bi, depth=0))
-            heapq.heappush(queue, _State(priority=float(rng.uniform(0.2, 1.2)), pos=sp, direction=_turn_vec(d0, 180.0 + float(rng.uniform(-25.0, 25.0))), block_idx=bi, depth=0))
-            added += 2
+            added += 1
         block_seed_counts.append(added)
 
     traces: list[list[Vec2]] = []
@@ -443,33 +473,44 @@ def generate_classic_local_fill(
                     reason = "noodle_curve"
                     break
 
-            if step_idx > 0 and (step_idx % 2 == 0) and st.depth < 8:
+            # --- Distance-based grid branching ---
+            # Trigger branch evaluation when the trace crosses a grid interval
+            # (local_spacing_m). This produces regular T/cross intersections
+            # instead of the old random step-based branching.
+            current_grid_idx = int(total_len / local_spacing_m)
+            prev_grid_idx = int((total_len - step_m) / local_spacing_m)
+
+            if current_grid_idx > prev_grid_idx and st.depth < 6:
                 bp = float(cfg.local_classic_branch_prob)
                 if slope_deg > float(cfg.slope_serpentine_threshold_deg):
                     bp *= 0.8
-                # Depth-based probability decay: branches become rarer at
-                # higher generation depths to prevent infinite local sprawl.
-                depth_decay = max(0.0, (1.0 - float(st.depth) / 8.0)) ** float(cfg.local_classic_depth_decay_power)
+                depth_decay = max(0.0, (1.0 - float(st.depth) / 6.0)) ** float(cfg.local_classic_depth_decay_power)
                 bp *= depth_decay
-                # Distance-based branch probability decay: reduce branching
-                # far from higher-order roads for natural edge thinning.
                 if max_road_dist > 0.0 and (arterial_segments or collector_segments):
                     d_branch_check, _ = _nearest_road_distance_and_projection(nxt, arterial_segments + collector_segments)
                     if d_branch_check > 0.4 * max_road_dist:
                         dist_ratio = min(1.0, d_branch_check / max_road_dist)
                         bp *= max(0.1, 1.0 - dist_ratio)
-                # FIX: Removed trace_target_enabled branch suppression that prevented
-                # early branching. Now branches can form at normal rates for grid generation.
                 if rng.random() < bp:
-                    for sign in (-1.0, 1.0):
-                        if rng.random() > (0.55 if sign < 0 else 0.75):
-                            continue
-                        bdir = _turn_vec(d, sign * float(rng.uniform(65.0, 115.0)))
+                    # 40% cross intersection (both sides), 60% T intersection (one side)
+                    if rng.random() < 0.40:
+                        signs = [-1.0, 1.0]
+                    else:
+                        signs = [1.0 if rng.random() < 0.5 else -1.0]
+                    for sign in signs:
+                        # Near-orthogonal branch with tiny random perturbation
+                        bdir = _turn_vec(d, sign * float(rng.uniform(88.0, 92.0)))
                         if bdir.length() <= 1e-9:
                             continue
                         heapq.heappush(
                             queue,
-                            _State(priority=float(st.depth + 1) + float(rng.uniform(0.0, 0.9)), pos=nxt, direction=bdir, block_idx=st.block_idx, depth=st.depth + 1),
+                            _State(
+                                priority=float(st.depth + 1) + float(rng.uniform(0.0, 0.2)),
+                                pos=nxt,
+                                direction=bdir,
+                                block_idx=st.block_idx,
+                                depth=st.depth + 1,
+                            ),
                         )
                         branch_enq += 1
 
@@ -516,6 +557,17 @@ def generate_classic_local_fill(
 
         traces.append(pts)
         cul_flags.append(bool(cul))
+        # Stream completed local trace
+        _emit_stream_event(stream_cb, {
+            "event_type": "road_trace_progress",
+            "data": {
+                "trace_id": f"local-trace-{len(traces) - 1}",
+                "points": [{"x": p.x, "y": p.y} for p in pts],
+                "complete": True,
+                "road_class": "local",
+                "culdesac": bool(cul),
+            },
+        })
         d_col_end, _ = _nearest_road_distance_and_projection(pts[-1], collector_segments) if collector_segments else (float("inf"), None)
         d_col_start, _ = _nearest_road_distance_and_projection(pts[0], collector_segments) if collector_segments else (float("inf"), None)
         connected_to_collector = bool(min(d_col_start, d_col_end) < max(junction_probe * 2.0, 26.0))

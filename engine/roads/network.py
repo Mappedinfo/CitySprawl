@@ -1493,6 +1493,7 @@ def _generate_hierarchy_linework(
                         river_setback_m=river_setback_m,
                     ),
                     seed=seed,
+                    stream_cb=stream_cb,
                 )
             except Exception:
                 local_backend = "grid_clip"
@@ -2254,7 +2255,26 @@ def generate_roads(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
     )
-    _emit_road_progress(progress_cb, "roads.route_final", 0.97, "Finalized routed road geometry")
+    _emit_road_progress(progress_cb, "roads.route_final", 0.94, "Finalized routed road geometry")
+
+    # Street-run aggregation: aggregate fragmented edges into semantically continuous street segments
+    street_run_metrics_data: dict[str, float] = {}
+    try:
+        from engine.roads.street_run import (
+            aggregate_street_runs,
+            street_run_metrics as calc_street_run_metrics,
+            spine_street_run_metrics as calc_spine_metrics,
+            road_class_street_run_metrics as calc_class_metrics,
+        )
+        street_runs, street_run_diag = aggregate_street_runs(edges=edges, nodes=nodes)
+        street_run_metrics_data.update(street_run_diag)
+        street_run_metrics_data.update(calc_street_run_metrics(street_runs))
+        street_run_metrics_data.update(calc_spine_metrics(street_runs))
+        street_run_metrics_data.update(calc_class_metrics(street_runs))
+    except Exception:
+        street_run_metrics_data["street_run_aggregation_failed"] = 1.0
+    _emit_road_progress(progress_cb, "roads.street_runs", 0.97, "Aggregated street runs")
+
     local_cul_final = sum(1 for e in edges if str(getattr(e, "road_class", "")) == "local" and _has_edge_flag(e, "culdesac"))
     local_edges_final = [e for e in edges if str(getattr(e, "road_class", "")) == "local"]
     local_two_point_count = 0
@@ -2269,6 +2289,7 @@ def generate_roads(
     metrics.update({k: float(v) for k, v in hierarchy_numeric.items()})
     metrics.update({k: float(v) for k, v in inter_numeric.items()})
     metrics.update({k: float(v) for k, v in syntax_numeric.items()})
+    metrics.update({k: float(v) for k, v in street_run_metrics_data.items()})
     metrics["local_culdesac_edge_count_final"] = float(local_cul_final)
     local_cul_pre = float(metrics.get("local_culdesac_edge_count_pre_topology", 0.0))
     metrics["local_culdesac_preserved_ratio"] = float(local_cul_final / local_cul_pre) if local_cul_pre > 0.0 else 0.0

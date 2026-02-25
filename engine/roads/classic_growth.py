@@ -752,6 +752,18 @@ class ClassicRoadGenerator:
             points.append(nxt)
             total_len += cur.distance_to(nxt)
             prev_dir = d
+
+            # Turtle step streaming event: emit growing polyline each step
+            _emit_stream_event(self.stream_cb, {
+                "event_type": "road_trace_progress",
+                "data": {
+                    "trace_id": f"collector-trace-{self.trace_count}",
+                    "points": [{"x": p.x, "y": p.y} for p in points],
+                    "complete": False,
+                    "road_class": "collector",
+                },
+            })
+
             attach_budget_remaining = max(0, attach_budget_remaining - 1)
             if riverfront_bias_steps_remaining > 0:
                 riverfront_bias_steps_remaining -= 1
@@ -844,11 +856,11 @@ class ClassicRoadGenerator:
                 continue
             traces.append(tr.points)
             cul_flags.append(bool(tr.culdesac))
-            # Stream the completed trace
+            # Stream the completed trace (use same trace_id as partial events)
             _emit_stream_event(self.stream_cb, {
                 "event_type": "road_trace_progress",
                 "data": {
-                    "trace_id": f"trace-{self.trace_count}",
+                    "trace_id": f"collector-trace-{self.trace_count}",
                     "points": [{"x": p.x, "y": p.y} for p in tr.points],
                     "complete": True,
                     "road_class": "collector",

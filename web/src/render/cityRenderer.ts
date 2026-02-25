@@ -249,14 +249,20 @@ export function drawCity(
       const path = edge.path_points && edge.path_points.length >= 2 ? edge.path_points : null;
       if (edge.road_class === 'arterial') {
         ctx.strokeStyle = 'rgba(236, 246, 255, 0.98)';
+        ctx.setLineDash([]);
       } else if (edge.road_class === 'collector') {
         ctx.strokeStyle = 'rgba(194, 238, 255, 0.88)';
+        ctx.setLineDash([]);
       } else if (edge.road_class === 'pedestrian') {
         ctx.strokeStyle = 'rgba(122, 220, 255, 0.68)';
+        ctx.setLineDash([3, 4]);
       } else if (edge.road_class === 'service') {
         ctx.strokeStyle = 'rgba(126, 198, 228, 0.58)';
+        ctx.setLineDash([]);
       } else {
+        // Local roads (motorized)
         ctx.strokeStyle = 'rgba(136, 214, 245, 0.62)';
+        ctx.setLineDash([]);
       }
       ctx.lineWidth = roadStrokeWidthPx(edge, extent, width, viewport.scale);
       ctx.beginPath();
@@ -294,5 +300,27 @@ export function drawCity(
       }
     }
     ctx.restore();
+
+    // Independent pedestrian paths (from artifact.pedestrian_paths)
+    const pedPaths = artifact.pedestrian_paths;
+    if ((layers.showPedestrianRoads ?? true) && pedPaths?.length) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(102, 230, 180, 0.65)';
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.setLineDash([4 * viewport.scale, 5 * viewport.scale]);
+      for (const path of pedPaths) {
+        if (!path.points || path.points.length < 2) continue;
+        ctx.lineWidth = clamp(worldMetersToPixels(path.width_m || 3.0, extent, width, viewport.scale), 0.5, 3.5);
+        ctx.beginPath();
+        path.points.forEach((pt, idx) => {
+          const s = worldToScreen(pt.x, pt.y, extent, width, height, viewport);
+          if (idx === 0) ctx.moveTo(s.x, s.y);
+          else ctx.lineTo(s.x, s.y);
+        });
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 }

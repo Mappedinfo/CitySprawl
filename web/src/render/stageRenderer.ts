@@ -499,6 +499,9 @@ export function drawStreamingTraces(
     } else if (trace.road_class === 'collector') {
       ctx.strokeStyle = 'rgba(200, 220, 255, 0.85)';
       ctx.lineWidth = 2;
+    } else if (trace.road_class === 'local') {
+      ctx.strokeStyle = 'rgba(120, 255, 180, 0.7)';
+      ctx.lineWidth = 1.2;
     } else {
       ctx.strokeStyle = 'rgba(180, 200, 230, 0.75)';
       ctx.lineWidth = 1.5;
@@ -524,11 +527,14 @@ export function drawStreamingTraces(
   }
 
   // Draw partial traces (growing, with animation)
-  ctx.strokeStyle = 'rgba(255, 220, 100, 0.95)';
-  ctx.lineWidth = 3;
-
   for (const [traceId, points] of data.partialTraces) {
     if (points.length < 2) continue;
+
+    const isCollector = traceId.startsWith('collector-trace-');
+    ctx.strokeStyle = isCollector
+      ? 'rgba(100, 220, 255, 0.95)'
+      : 'rgba(255, 220, 100, 0.95)';
+    ctx.lineWidth = isCollector ? 3 : 2;
 
     ctx.beginPath();
     points.forEach((p, i) => {
@@ -542,19 +548,23 @@ export function drawStreamingTraces(
     const last = points[points.length - 1];
     const s = worldToScreen(last.x, last.y, extent, cssWidth, cssHeight, viewport);
     const pulse = (nowMs % 800) / 800;
-    const radius = 4 + pulse * 8;
+    const radius = 4 + pulse * (isCollector ? 10 : 6);
     const alpha = 1 - pulse;
 
     ctx.beginPath();
     ctx.arc(s.x, s.y, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(255, 220, 100, ${alpha})`;
+    ctx.strokeStyle = isCollector
+      ? `rgba(100, 220, 255, ${alpha})`
+      : `rgba(255, 220, 100, ${alpha})`;
     ctx.lineWidth = 2;
     ctx.stroke();
 
     // Solid center dot
     ctx.beginPath();
     ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 240, 180, 1)';
+    ctx.fillStyle = isCollector
+      ? 'rgba(180, 240, 255, 1)'
+      : 'rgba(255, 240, 180, 1)';
     ctx.fill();
   }
 
@@ -604,6 +614,16 @@ export function drawStreamingTraces(
       });
       ctx.stroke();
     }
+  }
+
+  // Progress indicator overlay
+  const totalPartial = data.partialTraces.size;
+  const totalCompleted = data.completedTraces.length;
+  if (totalPartial > 0 || totalCompleted > 0) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Roads: ${totalCompleted} done, ${totalPartial} active`, 10, cssHeight - 14);
   }
 
   ctx.restore();
