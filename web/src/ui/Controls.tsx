@@ -1,4 +1,13 @@
 import type { GenerateConfig, PresetsResponse } from '../types/city';
+import {
+  ALL_LAYER_KEYS,
+  LAYER_GROUPS,
+  LAYER_LABELS,
+  LAYER_LEGEND_SPECS,
+  type LayerGroupId,
+  type LayerKey,
+  type LayerUiState,
+} from './layerCatalog';
 
 type Props = {
   config: GenerateConfig;
@@ -28,69 +37,9 @@ type Props = {
     buildings: boolean;
     greenZones: boolean;
   };
+  layerUiState?: LayerUiState;
   onLayerToggle: (key: keyof Props['layers']) => void;
 };
-
-type LayerKey = keyof Props['layers'];
-type LayerGroupId = 'field' | 'surface' | 'line' | 'point';
-type LayerItemDef = {
-  key: LayerKey;
-  indent?: 0 | 1;
-};
-type LayerGroupDef = {
-  id: LayerGroupId;
-  label: string;
-  items: LayerItemDef[];
-};
-
-const LAYER_LABELS: Record<LayerKey, string> = {
-  terrain: 'Terrain',
-  rivers: 'Rivers',
-  majorRoads: 'Major Roads',
-  localRoads: 'Local Roads',
-  contours: 'Contours',
-  blocks: 'Blocks',
-  parcels: 'Parcels',
-  pedestrianPaths: 'Ped Paths',
-  debugCandidates: 'Candidate Edges',
-  labels: 'Labels',
-  analysis: 'Analysis Heatmaps',
-  resources: 'Resource Sites',
-  traffic: 'Traffic Heat',
-  buildings: 'Buildings',
-  greenZones: 'Green Zones',
-};
-
-const LAYER_GROUPS: LayerGroupDef[] = [
-  {
-    id: 'field',
-    label: 'Field / 场',
-    items: [{ key: 'terrain' }, { key: 'contours' }, { key: 'analysis' }],
-  },
-  {
-    id: 'surface',
-    label: 'Surface / 面',
-    items: [{ key: 'rivers' }, { key: 'blocks' }, { key: 'parcels' }, { key: 'buildings' }, { key: 'greenZones' }],
-  },
-  {
-    id: 'line',
-    label: 'Line / 线',
-    items: [
-      { key: 'majorRoads' },
-      { key: 'localRoads' },
-      { key: 'pedestrianPaths' },
-      { key: 'debugCandidates' },
-      { key: 'traffic' },
-    ],
-  },
-  {
-    id: 'point',
-    label: 'Point / 点',
-    items: [{ key: 'resources' }, { key: 'labels' }],
-  },
-];
-
-const GROUPED_LAYER_KEYS: LayerKey[] = LAYER_GROUPS.flatMap((group) => group.items.map((item) => item.key));
 let layerConfigMismatchWarned = false;
 
 function warnIfLayerGroupCoverageMismatch(layers: Props['layers']): void {
@@ -99,13 +48,13 @@ function warnIfLayerGroupCoverageMismatch(layers: Props['layers']): void {
   const actualKeys = Object.keys(layers) as LayerKey[];
   const groupedSet = new Set<LayerKey>();
   const duplicateKeys: LayerKey[] = [];
-  for (const key of GROUPED_LAYER_KEYS) {
+  for (const key of ALL_LAYER_KEYS) {
     if (groupedSet.has(key)) duplicateKeys.push(key);
     groupedSet.add(key);
   }
 
   const missingKeys = actualKeys.filter((key) => !groupedSet.has(key));
-  const extraKeys = GROUPED_LAYER_KEYS.filter((key) => !actualKeys.includes(key));
+  const extraKeys = ALL_LAYER_KEYS.filter((key) => !actualKeys.includes(key));
   if (!missingKeys.length && !extraKeys.length && !duplicateKeys.length) return;
 
   layerConfigMismatchWarned = true;
@@ -114,8 +63,105 @@ function warnIfLayerGroupCoverageMismatch(layers: Props['layers']): void {
     extraKeys,
     duplicateKeys,
     actualKeys,
-    groupedKeys: GROUPED_LAYER_KEYS,
+    groupedKeys: ALL_LAYER_KEYS,
   });
+}
+
+function LegendGlyph({ layerKey }: { layerKey: LayerKey }) {
+  const spec = LAYER_LEGEND_SPECS[layerKey];
+  switch (spec.kind) {
+    case 'terrain':
+      return (
+        <span className="legend-glyph legend-terrain" aria-hidden="true">
+          <span className="legend-terrain-band band-a" />
+          <span className="legend-terrain-band band-b" />
+        </span>
+      );
+    case 'contours':
+      return (
+        <span className="legend-glyph legend-contours" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      );
+    case 'analysis':
+      return <span className="legend-glyph legend-analysis" aria-hidden="true" />;
+    case 'rivers':
+      return (
+        <span className="legend-glyph legend-rivers" aria-hidden="true">
+          <span className="legend-river-line" />
+        </span>
+      );
+    case 'polygon':
+      return (
+        <span className={`legend-glyph legend-polygon legend-polygon-${layerKey}`} aria-hidden="true">
+          <span className="legend-polygon-inner" />
+        </span>
+      );
+    case 'buildings':
+      return (
+        <span className="legend-glyph legend-buildings" aria-hidden="true">
+          <span className="legend-bldg b1" />
+          <span className="legend-bldg b2" />
+          <span className="legend-bldg b3" />
+        </span>
+      );
+    case 'green':
+      return (
+        <span className="legend-glyph legend-green" aria-hidden="true">
+          <span className="legend-green-leaf" />
+        </span>
+      );
+    case 'majorRoads':
+      return (
+        <span className="legend-glyph legend-major-roads" aria-hidden="true">
+          <span className="legend-road-major line-a" />
+          <span className="legend-road-major line-b" />
+        </span>
+      );
+    case 'localRoads':
+      return (
+        <span className="legend-glyph legend-local-roads" aria-hidden="true">
+          <span className="legend-road-local" />
+        </span>
+      );
+    case 'pedPath':
+      return (
+        <span className="legend-glyph legend-ped-path" aria-hidden="true">
+          <span className="legend-ped-line" />
+        </span>
+      );
+    case 'candidate':
+      return (
+        <span className="legend-glyph legend-candidate" aria-hidden="true">
+          <span className="legend-candidate-line" />
+        </span>
+      );
+    case 'traffic':
+      return (
+        <span className="legend-glyph legend-traffic" aria-hidden="true">
+          <span className="legend-traffic-line" />
+        </span>
+      );
+    case 'resources':
+      return (
+        <span className="legend-glyph legend-resources" aria-hidden="true">
+          <span className="legend-dot dot-a" />
+          <span className="legend-dot dot-b" />
+          <span className="legend-dot dot-c" />
+        </span>
+      );
+    case 'labels':
+      return (
+        <span className="legend-glyph legend-labels" aria-hidden="true">
+          <span className="legend-label-dot" />
+          <span className="legend-label-text">A</span>
+        </span>
+      );
+    default:
+      return <span className="legend-glyph" aria-hidden="true" />;
+  }
 }
 
 export function Controls({
@@ -130,9 +176,14 @@ export function Controls({
   onLoadStagedJson,
   loading,
   layers,
+  layerUiState,
   onLayerToggle,
 }: Props) {
   warnIfLayerGroupCoverageMismatch(layers);
+  const isGenerationPhase = Boolean(layerUiState?.isGenerationPhase);
+  const reachedSet = new Set(layerUiState?.reachedLayerKeys ?? []);
+  const activeSet = new Set(layerUiState?.activeLayerKeys ?? []);
+  const activeGroupSet = new Set<LayerGroupId>(layerUiState?.activeGroupIds ?? []);
 
   return (
     <aside className="panel controls-panel">
@@ -334,17 +385,40 @@ export function Controls({
         <div className="layer-groups">
           {LAYER_GROUPS.map((group) => (
             <div key={group.id} className="layer-group" data-layer-group={group.id}>
-              <div className="layer-group-title">{group.label}</div>
+              <div className={`layer-group-title${activeGroupSet.has(group.id) ? ' is-active-group' : ''}`}>{group.label}</div>
               <div className="layer-group-body">
                 {group.items.map(({ key, indent = 0 }) => (
-                  <label
-                    key={key}
-                    className={`checkbox-row compact layer-item${indent ? ' is-child' : ''}`}
-                    data-layer-key={key}
-                  >
-                    <input type="checkbox" checked={layers[key]} onChange={() => onLayerToggle(key)} />
-                    <span className="layer-item-label">{LAYER_LABELS[key]}</span>
-                  </label>
+                  (() => {
+                    const isReached = !isGenerationPhase || reachedSet.has(key);
+                    const isActiveGenerating = isGenerationPhase && activeSet.has(key);
+                    const rowClass = [
+                      'checkbox-row',
+                      'compact',
+                      'layer-item',
+                      indent ? 'is-child' : '',
+                      isGenerationPhase && isReached ? 'is-reached' : '',
+                      isGenerationPhase && !isReached ? 'is-unreached' : '',
+                      isActiveGenerating ? 'is-active-generating' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ');
+                    return (
+                      <label key={key} className={rowClass} data-layer-key={key}>
+                        <input
+                          type="checkbox"
+                          checked={layers[key]}
+                          disabled={!isReached}
+                          onChange={() => onLayerToggle(key)}
+                        />
+                        <span className="layer-item-main">
+                          <span className="layer-item-label">{LAYER_LABELS[key]}</span>
+                          <span className="layer-item-legend">
+                            <LegendGlyph layerKey={key} />
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })()
                 ))}
               </div>
             </div>

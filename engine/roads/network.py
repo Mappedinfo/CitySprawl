@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 from math import atan2, cos, hypot, pi, sin
+from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
@@ -37,6 +38,9 @@ class BuiltRoadEdge:
     render_order: int = 1
     path_points: Optional[List[Vec2]] = None
     flags: frozenset[str] = frozenset()
+    continuity_id: Optional[str] = None
+    parent_continuity_id: Optional[str] = None
+    segment_order: Optional[int] = None
 
 
 @dataclass
@@ -224,6 +228,44 @@ def _edge_flags(edge: object) -> frozenset[str]:
 
 def _has_edge_flag(edge: object, name: str) -> bool:
     return str(name) in _edge_flags(edge)
+
+
+def _edge_continuity_id(edge: object) -> Optional[str]:
+    value = getattr(edge, "continuity_id", None)
+    if value is None:
+        return None
+    try:
+        s = str(value)
+    except Exception:
+        return None
+    return s or None
+
+
+def _edge_parent_continuity_id(edge: object) -> Optional[str]:
+    value = getattr(edge, "parent_continuity_id", None)
+    if value is None:
+        return None
+    try:
+        s = str(value)
+    except Exception:
+        return None
+    return s or None
+
+
+def _edge_segment_order(edge: object) -> Optional[int]:
+    value = getattr(edge, "segment_order", None)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _coalesce_optional_str(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    if a and b:
+        return a if a == b else None
+    return a or b
 
 
 def _edge_id_suffix_from_flags(flags: frozenset[str]) -> str:
@@ -535,6 +577,9 @@ def _route_all_edges(
                 render_order=edge.render_order,
                 path_points=list(edge.path_points),
                 flags=_edge_flags(edge),
+                continuity_id=_edge_continuity_id(edge),
+                parent_continuity_id=_edge_parent_continuity_id(edge),
+                segment_order=None,
             )
             continue
         path_points = _route_polyline_for_edge(edge, node_lookup, extent_m, slope, river_mask)
@@ -560,6 +605,9 @@ def _route_all_edges(
             render_order=edge.render_order,
             path_points=path_points,
             flags=_edge_flags(edge),
+            continuity_id=_edge_continuity_id(edge),
+            parent_continuity_id=_edge_parent_continuity_id(edge),
+            segment_order=None,
         )
 
 
@@ -945,6 +993,9 @@ def _append_line_edge(
     road_class: str,
     width_m: float,
     render_order: int,
+    continuity_id: Optional[str] = None,
+    parent_continuity_id: Optional[str] = None,
+    segment_order: Optional[int] = None,
     nodes: List[BuiltRoadNode],
     edges: List[BuiltRoadEdge],
     extent_m: float,
@@ -962,6 +1013,9 @@ def _append_line_edge(
         road_class=road_class,
         width_m=width_m,
         render_order=render_order,
+        continuity_id=continuity_id,
+        parent_continuity_id=parent_continuity_id,
+        segment_order=segment_order,
         nodes=nodes,
         edges=edges,
         extent_m=extent_m,
@@ -1024,6 +1078,9 @@ def _append_polyline_edge(
     road_class: str,
     width_m: float,
     render_order: int,
+    continuity_id: Optional[str] = None,
+    parent_continuity_id: Optional[str] = None,
+    segment_order: Optional[int] = None,
     edge_id_suffix: str = "",
     edge_flags: Optional[set[str]] = None,
     nodes: List[BuiltRoadNode],
@@ -1060,6 +1117,9 @@ def _append_polyline_edge(
                         road_class=road_class,
                         width_m=width_m,
                         render_order=render_order,
+                        continuity_id=continuity_id,
+                        parent_continuity_id=parent_continuity_id,
+                        segment_order=segment_order,
                         edge_id_suffix=edge_id_suffix if ci == (len(chunks) - 1) else "",
                         edge_flags=sub_flags or None,
                         nodes=nodes,
@@ -1101,6 +1161,9 @@ def _append_polyline_edge(
             render_order=int(render_order),
             path_points=points,
             flags=flags,
+            continuity_id=(str(continuity_id) if continuity_id is not None else None),
+            parent_continuity_id=(str(parent_continuity_id) if parent_continuity_id is not None else None),
+            segment_order=(int(segment_order) if segment_order is not None else None),
         )
     )
     if stream_cb is not None:
@@ -1153,9 +1216,10 @@ def _build_block_polygons_from_network(
     nodes: Sequence[BuiltRoadNode],
     edges: Sequence[BuiltRoadEdge],
     river_areas: Optional[Sequence[object]],
+    block_extraction_config: Optional[object] = None,
 ) -> Tuple[List[object], object]:
     try:
-        from engine.blocks.extraction import extract_macro_blocks  # type: ignore
+        from engine.blocks.extraction import BlockExtractionConfig, extract_macro_blocks  # type: ignore
         from engine.models import Point2D, RoadEdgeRecord, RoadNetwork, RoadNodeRecord  # type: ignore
     except Exception:
         return ([], None)
@@ -1178,7 +1242,13 @@ def _build_block_polygons_from_network(
                 path_points=path_points,
             )
         )
-    extraction = extract_macro_blocks(float(extent_m), RoadNetwork(nodes=road_nodes, edges=road_edges), list(river_areas or []))
+    extraction_cfg = block_extraction_config if isinstance(block_extraction_config, BlockExtractionConfig) else None
+    extraction = extract_macro_blocks(
+        float(extent_m),
+        RoadNetwork(nodes=road_nodes, edges=road_edges),
+        list(river_areas or []),
+        config=extraction_cfg,
+    )
     return (list(extraction.macro_blocks), extraction.river_union)
 
 
@@ -1190,6 +1260,187 @@ def _subtract_river_setback(poly, river_union, setback_m: float):
     except Exception:
         return poly
     return trimmed
+
+
+def _polyline_coords_for_edge(edge: BuiltRoadEdge, node_lookup: Dict[str, BuiltRoadNode]) -> list[tuple[float, float]]:
+    pts = list(edge.path_points or [])
+    if not pts or len(pts) < 2:
+        u = node_lookup.get(edge.u)
+        v = node_lookup.get(edge.v)
+        if u is None or v is None:
+            return []
+        pts = [u.pos, v.pos]
+    out: list[tuple[float, float]] = []
+    for p in pts:
+        x = float(p.x)
+        y = float(p.y)
+        if out and abs(out[-1][0] - x) <= 1e-9 and abs(out[-1][1] - y) <= 1e-9:
+            continue
+        out.append((x, y))
+    return out
+
+
+def _build_local_coverage_target_geom(
+    *,
+    local_blocks: Sequence[object],
+    river_union: object,
+    river_setback_m: float,
+):
+    try:
+        from shapely.geometry import Polygon  # type: ignore
+        from shapely.ops import unary_union  # type: ignore
+    except Exception:
+        return None
+    polys = []
+    for block in local_blocks:
+        geom = _subtract_river_setback(block, river_union, river_setback_m)
+        for poly in _iter_polys_geom(geom):
+            try:
+                cleaned = poly.buffer(0)
+            except Exception:
+                cleaned = poly
+            for p in _iter_polys_geom(cleaned):
+                if not getattr(p, "is_empty", True) and float(getattr(p, "area", 0.0) or 0.0) > 1e-6:
+                    polys.append(p)
+    if not polys:
+        return Polygon()
+    try:
+        return unary_union(polys).buffer(0)
+    except Exception:
+        try:
+            return unary_union(polys)
+        except Exception:
+            return None
+
+
+def _compute_local_coverage_stats(
+    *,
+    nodes: Sequence[BuiltRoadNode],
+    edges: Sequence[BuiltRoadEdge],
+    local_blocks: Sequence[object],
+    river_union: object,
+    river_setback_m: float,
+    coverage_radius_m: float,
+    pending_local_entries: Optional[Sequence[dict]] = None,
+    uncovered_min_area_m2: float = 0.0,
+) -> dict[str, object]:
+    defaults: dict[str, object] = {
+        "buildable_area_m2": 0.0,
+        "coverage_radius_m": float(max(0.0, coverage_radius_m)),
+        "coverage_ratio": 0.0,
+        "uncovered_area_m2": 0.0,
+        "target_geom": None,
+        "coverage_geom": None,
+        "uncovered_geom": None,
+        "uncovered_polys": [],
+    }
+    try:
+        from shapely.geometry import LineString, Polygon  # type: ignore
+        from shapely.ops import unary_union  # type: ignore
+    except Exception:
+        return defaults
+
+    target_geom = _build_local_coverage_target_geom(
+        local_blocks=local_blocks,
+        river_union=river_union,
+        river_setback_m=river_setback_m,
+    )
+    if target_geom is None or getattr(target_geom, "is_empty", True):
+        defaults["target_geom"] = target_geom
+        return defaults
+    try:
+        target_geom = target_geom.buffer(0)
+    except Exception:
+        pass
+    target_area = float(getattr(target_geom, "area", 0.0) or 0.0)
+    if target_area <= 1e-9:
+        defaults["target_geom"] = target_geom
+        return defaults
+
+    radius = float(max(1.0, coverage_radius_m))
+    node_lookup = {n.id: n for n in nodes}
+    buffers = []
+    for edge in edges:
+        if str(getattr(edge, "road_class", "")) not in {"arterial", "collector", "local"}:
+            continue
+        coords = _polyline_coords_for_edge(edge, node_lookup)
+        if len(coords) < 2:
+            continue
+        try:
+            line = LineString(coords)
+        except Exception:
+            continue
+        if getattr(line, "is_empty", True) or float(getattr(line, "length", 0.0) or 0.0) <= 1e-6:
+            continue
+        try:
+            buffers.append(line.buffer(radius, cap_style=2, join_style=2, resolution=4))
+        except Exception:
+            continue
+    for entry in pending_local_entries or []:
+        pts = list(entry.get("pts", []) or [])
+        coords: list[tuple[float, float]] = []
+        for p in pts:
+            x = getattr(p, "x", None)
+            y = getattr(p, "y", None)
+            if x is None or y is None:
+                continue
+            xy = (float(x), float(y))
+            if coords and abs(coords[-1][0] - xy[0]) <= 1e-9 and abs(coords[-1][1] - xy[1]) <= 1e-9:
+                continue
+            coords.append(xy)
+        if len(coords) < 2:
+            continue
+        try:
+            line = LineString(coords)
+        except Exception:
+            continue
+        if getattr(line, "is_empty", True) or float(getattr(line, "length", 0.0) or 0.0) <= 1e-6:
+            continue
+        try:
+            buffers.append(line.buffer(radius, cap_style=2, join_style=2, resolution=4))
+        except Exception:
+            continue
+
+    if buffers:
+        try:
+            coverage_geom = unary_union(buffers)
+        except Exception:
+            coverage_geom = Polygon()
+        try:
+            coverage_geom = coverage_geom.intersection(target_geom).buffer(0)
+        except Exception:
+            try:
+                coverage_geom = coverage_geom.intersection(target_geom)
+            except Exception:
+                coverage_geom = Polygon()
+    else:
+        coverage_geom = Polygon()
+
+    coverage_area = float(getattr(coverage_geom, "area", 0.0) or 0.0)
+    try:
+        uncovered_geom = target_geom.difference(coverage_geom).buffer(0)
+    except Exception:
+        try:
+            uncovered_geom = target_geom.difference(coverage_geom)
+        except Exception:
+            uncovered_geom = target_geom
+    uncovered_area = float(getattr(uncovered_geom, "area", 0.0) or 0.0)
+    uncovered_polys = [
+        poly
+        for poly in _iter_polys_geom(uncovered_geom)
+        if float(getattr(poly, "area", 0.0) or 0.0) >= float(max(0.0, uncovered_min_area_m2))
+    ]
+
+    return {
+        "buildable_area_m2": target_area,
+        "coverage_radius_m": radius,
+        "coverage_ratio": float(max(0.0, min(1.0, coverage_area / max(target_area, 1e-9)))),
+        "uncovered_area_m2": uncovered_area,
+        "target_geom": target_geom,
+        "coverage_geom": coverage_geom,
+        "uncovered_geom": uncovered_geom,
+        "uncovered_polys": uncovered_polys,
+    }
 
 
 def _generate_hierarchy_linework(
@@ -1303,12 +1554,23 @@ def _generate_hierarchy_linework(
         "collector_tensor_enabled": 0.0,
         "collector_tensor_degraded": 0.0,
         "collector_tensor_trace_count": 0.0,
+        "road_hierarchy_collector_ms": 0.0,
+        "road_hierarchy_local_classic_ms": 0.0,
+        "road_hierarchy_local_coverage_pre_ms": 0.0,
+        "road_hierarchy_local_frontier_supplement_ms": 0.0,
+        "road_hierarchy_local_grid_supplement_ms": 0.0,
+        "road_hierarchy_local_reroute_ms": 0.0,
+        "road_hierarchy_local_append_ms": 0.0,
+        "road_hierarchy_local_coverage_final_ms": 0.0,
+        "road_hierarchy_total_ms": 0.0,
     }
     if style == "skeleton":
         return notes, numeric
     _ = minor_bridge_budget  # reserved for future constrained tributary bridges
 
     rng = np.random.default_rng(seed + 4109)
+    hierarchy_t0 = perf_counter()
+    t_collector_start = perf_counter()
 
     # Collector lines are generated first from macro blocks carved by the arterial skeleton.
     collector_blocks, river_union = _build_block_polygons_from_network(
@@ -1449,20 +1711,78 @@ def _generate_hierarchy_linework(
     else:
         notes.append("collector_generator:classic_turtle")
     numeric["collector_added_count"] = float(collector_added)
+    numeric["road_hierarchy_collector_ms"] = float((perf_counter() - t_collector_start) * 1000.0)
 
     # Local lines are generated after collectors so they subdivide the updated blocks.
+    try:
+        from engine.blocks.extraction import BlockExtractionConfig  # type: ignore
+    except Exception:
+        local_block_extraction_cfg = None
+    else:
+        local_block_extraction_cfg = BlockExtractionConfig(
+            max_block_span_m=max(1400.0, float(collector_spacing_m) * 3.2),
+            max_block_area_m2=max(900_000.0, float(max_local_block_area_m2) * 4.0),
+            max_block_aspect_ratio=12.0,
+            split_max_depth=6,
+        )
     local_blocks, river_union = _build_block_polygons_from_network(
         extent_m=extent_m,
         nodes=nodes,
         edges=edges,
         river_areas=river_areas,
+        block_extraction_config=local_block_extraction_cfg,
     )
     local_backend = (local_generator or "classic_sprawl").lower()
     local_added = 0
     local_need_grid_supplement = False
+    local_need_count_supplement = False
+    local_need_coverage_supplement = False
     local_grid_supplement_budget: Optional[int] = None
-    supplement_added = 0
+    supplement_budget_used = 0
+    grid_supplement_added = 0
+    frontier_supplement_added = 0
+    local_coverage_ratio_threshold = 0.92
+    local_coverage_radius_m = max(90.0, float(local_spacing_m) * 0.9)
+    local_coverage_stats_pre: Optional[dict[str, object]] = None
+    local_coverage_uncovered_polys: list[object] = []
+    local_coverage_supplement_added_count = 0
     pending_local_entries: list[dict] = []
+    local_continuity_seq = 0
+    lineage_to_continuity_id: dict[str, str] = {}
+
+    def _new_local_continuity_id(prefix: str = "local") -> str:
+        nonlocal local_continuity_seq
+        local_continuity_seq += 1
+        return f"{prefix}-cont-{int(local_continuity_seq)}"
+
+    def _continuity_from_meta(meta: object, *, default_prefix: str = "local") -> tuple[str, Optional[str]]:
+        lineage_id: Optional[str] = None
+        parent_lineage_id: Optional[str] = None
+        if isinstance(meta, dict):
+            raw_lineage = meta.get("trace_lineage_id")
+            raw_parent = meta.get("parent_trace_lineage_id")
+            lineage_id = str(raw_lineage) if raw_lineage else None
+            parent_lineage_id = str(raw_parent) if raw_parent else None
+        elif meta is not None:
+            raw_lineage = getattr(meta, "trace_lineage_id", None)
+            raw_parent = getattr(meta, "parent_trace_lineage_id", None)
+            lineage_id = str(raw_lineage) if raw_lineage else None
+            parent_lineage_id = str(raw_parent) if raw_parent else None
+
+        continuity_id = None
+        if lineage_id:
+            continuity_id = lineage_to_continuity_id.get(lineage_id)
+            if continuity_id is None:
+                continuity_id = _new_local_continuity_id(prefix=default_prefix)
+                lineage_to_continuity_id[lineage_id] = continuity_id
+        if continuity_id is None:
+            continuity_id = _new_local_continuity_id(prefix=default_prefix)
+        parent_continuity_id = lineage_to_continuity_id.get(parent_lineage_id) if parent_lineage_id else None
+        return continuity_id, parent_continuity_id
+
+    local_fill_cfg_cls = None
+    local_fill_fn = None
+    t_local_classic_start = perf_counter()
     if local_backend == "classic_sprawl":
         try:
             from engine.roads.classic_local_fill import LocalClassicFillConfig, generate_classic_local_fill  # type: ignore
@@ -1471,6 +1791,8 @@ def _generate_hierarchy_linework(
             notes.append("local_generator_degraded:grid_clip")
             numeric["local_classic_degraded"] = 1.0
         else:
+            local_fill_cfg_cls = LocalClassicFillConfig
+            local_fill_fn = generate_classic_local_fill
             try:
                 numeric["local_classic_enabled"] = 1.0
                 local_traces, local_cul_flags, local_trace_meta, local_notes, local_numeric = generate_classic_local_fill(
@@ -1533,6 +1855,7 @@ def _generate_hierarchy_linework(
                             flags.add("culdesac")
                         if bool(getattr(meta, "is_spine_candidate", False)):
                             flags.add("local_spine")
+                        continuity_id, parent_continuity_id = _continuity_from_meta(meta, default_prefix="local")
                         pending_local_entries.append(
                             {
                                 "pts": list(pts),
@@ -1541,6 +1864,9 @@ def _generate_hierarchy_linework(
                                 "is_grid_supplement": False,
                                 "flags": flags,
                                 "length_m": _polyline_length(pts),
+                                "continuity_id": continuity_id,
+                                "parent_continuity_id": parent_continuity_id,
+                                "segment_order": None,
                             }
                         )
                         local_added += 1
@@ -1550,8 +1876,9 @@ def _generate_hierarchy_linework(
                     # Use an arterial-anchored local target; pre-topology collector counts are unstable and
                     # often shrink after intersection/syntax postprocess, which previously suppressed
                     # supplement when it was still needed.
-                    min_local_target = max(24, arterial_count_now * 4)
+                    min_local_target = max(24, arterial_count_now * 3)
                     if local_added < min_local_target:
+                        local_need_count_supplement = True
                         local_need_grid_supplement = True
                         deficit = int(max(0, min_local_target - local_added))
                         # Budgeted supplement: add enough extra locals to recover hierarchy density,
@@ -1559,11 +1886,166 @@ def _generate_hierarchy_linework(
                         # Budget leaves headroom for downstream intersection/syntax pruning.
                         local_grid_supplement_budget = int(max(16, min(320, deficit * 4)))
                         notes.append(f"local_generator_supplement:grid_clip:{local_added}->{min_local_target}")
+    numeric["road_hierarchy_local_classic_ms"] = float((perf_counter() - t_local_classic_start) * 1000.0)
 
+    t_local_coverage_pre_start = perf_counter()
+    if local_blocks:
+        local_coverage_stats_pre = _compute_local_coverage_stats(
+            nodes=nodes,
+            edges=edges,
+            local_blocks=local_blocks,
+            river_union=river_union,
+            river_setback_m=float(river_setback_m),
+            coverage_radius_m=float(local_coverage_radius_m),
+            pending_local_entries=pending_local_entries,
+            uncovered_min_area_m2=max(float(local_spacing_m) * float(local_spacing_m) * 1.25, 2_000.0),
+        )
+        local_coverage_uncovered_polys = list(local_coverage_stats_pre.get("uncovered_polys", []) or [])
+        pre_cov_ratio = float(local_coverage_stats_pre.get("coverage_ratio", 0.0) or 0.0)
+        pre_uncovered_area = float(local_coverage_stats_pre.get("uncovered_area_m2", 0.0) or 0.0)
+        if pre_cov_ratio < float(local_coverage_ratio_threshold):
+            local_need_coverage_supplement = True
+            local_need_grid_supplement = True
+            coverage_budget = int(
+                max(
+                    24,
+                    min(
+                        600,
+                        pre_uncovered_area / max(float(local_spacing_m) * float(local_spacing_m) * 0.8, 1.0),
+                    ),
+                )
+            ) if pre_uncovered_area > 1e-6 else 0
+            if coverage_budget > 0:
+                local_grid_supplement_budget = max(int(local_grid_supplement_budget or 0), int(coverage_budget))
+                notes.append(
+                    f"local_generator_supplement:coverage:{pre_cov_ratio:.2f}->{float(local_coverage_ratio_threshold):.2f}"
+                )
+    numeric["road_hierarchy_local_coverage_pre_ms"] = float((perf_counter() - t_local_coverage_pre_start) * 1000.0)
+
+    t_local_frontier_supp_start = perf_counter()
+    if (
+        local_backend == "classic_sprawl"
+        and local_need_coverage_supplement
+        and local_coverage_uncovered_polys
+        and local_fill_cfg_cls is not None
+        and local_fill_fn is not None
+    ):
+        remaining_budget = max(0, int(local_grid_supplement_budget or 0) - int(supplement_budget_used))
+        if remaining_budget > 0:
+            try:
+                frontier_cfg = local_fill_cfg_cls(
+                    local_spacing_m=local_spacing_m,
+                    local_classic_probe_step_m=local_classic_probe_step_m,
+                    local_classic_seed_spacing_m=max(float(local_classic_seed_spacing_m), float(local_spacing_m) * 0.9),
+                    local_classic_max_trace_len_m=max(float(local_classic_max_trace_len_m), float(local_spacing_m) * 2.4),
+                    local_classic_min_trace_len_m=max(float(local_classic_min_trace_len_m), 42.0),
+                    local_classic_turn_limit_deg=local_classic_turn_limit_deg,
+                    local_classic_branch_prob=min(float(local_classic_branch_prob), 0.18),
+                    local_classic_continue_prob=max(float(local_classic_continue_prob), 0.78),
+                    local_classic_culdesac_prob=min(float(local_classic_culdesac_prob), 0.25),
+                    local_classic_max_segments_per_block=max(2, min(int(local_classic_max_segments_per_block), 8)),
+                    local_classic_max_road_distance_m=local_classic_max_road_distance_m,
+                    local_classic_depth_decay_power=local_classic_depth_decay_power,
+                    local_community_seed_count_per_block=max(1, min(int(local_community_seed_count_per_block), 2)),
+                    local_community_spine_prob=local_community_spine_prob,
+                    local_arterial_setback_weight=local_arterial_setback_weight,
+                    local_collector_follow_weight=local_collector_follow_weight,
+                    local_allow_disconnected_accept=True,
+                    slope_straight_threshold_deg=slope_straight_threshold_deg,
+                    slope_serpentine_threshold_deg=slope_serpentine_threshold_deg,
+                    slope_hard_limit_deg=slope_hard_limit_deg,
+                    contour_follow_weight=contour_follow_weight,
+                    river_snap_dist_m=river_snap_dist_m,
+                    river_parallel_bias_weight=river_parallel_bias_weight,
+                    river_avoid_weight=river_avoid_weight,
+                    river_setback_m=river_setback_m,
+                )
+                cov_traces, cov_cul_flags, cov_trace_meta, _cov_notes, _cov_numeric = local_fill_fn(
+                    extent_m=extent_m,
+                    height=height,
+                    slope=slope,
+                    river_mask=river_mask,
+                    river_areas=river_areas,
+                    river_union=river_union,
+                    nodes=nodes,
+                    edges=edges,
+                    hubs=list(hubs or []),
+                    blocks=list(local_coverage_uncovered_polys),
+                    cfg=frontier_cfg,
+                    seed=int(seed) + 17031,
+                    stream_cb=stream_cb,
+                )
+            except Exception:
+                notes.append("local_generator_supplement:frontier_fill_degraded:grid_clip")
+            else:
+                frontier_added = 0
+                for trace_idx, pts in enumerate(cov_traces):
+                    if supplement_budget_used >= int(local_grid_supplement_budget or 0):
+                        break
+                    if len(pts) < 2:
+                        continue
+                    cul = bool(trace_idx < len(cov_cul_flags) and cov_cul_flags[trace_idx])
+                    meta = cov_trace_meta[trace_idx] if trace_idx < len(cov_trace_meta) else None
+                    flags = {"local_coverage_supplement"}
+                    if cul:
+                        flags.add("culdesac")
+                    if bool(getattr(meta, "is_spine_candidate", False)):
+                        flags.add("local_spine")
+                    continuity_id, parent_continuity_id = _continuity_from_meta(meta, default_prefix="local-cov")
+                    pending_local_entries.append(
+                        {
+                            "pts": list(pts),
+                            "cul": cul,
+                            "meta": meta,
+                            "is_grid_supplement": False,
+                            "flags": flags,
+                            "length_m": _polyline_length(pts),
+                            "continuity_id": continuity_id,
+                            "parent_continuity_id": parent_continuity_id,
+                            "segment_order": None,
+                        }
+                    )
+                    local_added += 1
+                    supplement_budget_used += 1
+                    frontier_added += 1
+                    frontier_supplement_added += 1
+                    local_coverage_supplement_added_count += 1
+                if frontier_added > 0:
+                    notes.append(f"local_generator_supplement:frontier_fill:{frontier_added}")
+                    post_frontier_cov = _compute_local_coverage_stats(
+                        nodes=nodes,
+                        edges=edges,
+                        local_blocks=local_blocks,
+                        river_union=river_union,
+                        river_setback_m=float(river_setback_m),
+                        coverage_radius_m=float(local_coverage_radius_m),
+                        pending_local_entries=pending_local_entries,
+                        uncovered_min_area_m2=max(float(local_spacing_m) * float(local_spacing_m) * 1.25, 2_000.0),
+                    )
+                    post_frontier_cov_ratio = float(post_frontier_cov.get("coverage_ratio", 0.0) or 0.0)
+                    if post_frontier_cov_ratio >= float(local_coverage_ratio_threshold):
+                        local_need_coverage_supplement = False
+                        notes.append(
+                            f"local_generator_supplement:frontier_fill_coverage_satisfied:{post_frontier_cov_ratio:.2f}"
+                        )
+                        if not local_need_count_supplement:
+                            local_need_grid_supplement = False
+    numeric["road_hierarchy_local_frontier_supplement_ms"] = float((perf_counter() - t_local_frontier_supp_start) * 1000.0)
+
+    t_local_grid_supp_start = perf_counter()
     if local_backend != "classic_sprawl" or local_need_grid_supplement:
-        for bi, block in enumerate(local_blocks):
+        supplement_source_polys: Sequence[object] = local_blocks
+        supplement_using_coverage_polys = False
+        if (
+            local_backend == "classic_sprawl"
+            and local_need_grid_supplement
+            and local_coverage_uncovered_polys
+        ):
+            supplement_source_polys = list(local_coverage_uncovered_polys)
+            supplement_using_coverage_polys = True
+        for bi, block in enumerate(supplement_source_polys):
             if local_backend == "classic_sprawl" and local_need_grid_supplement and local_grid_supplement_budget is not None:
-                if supplement_added >= int(local_grid_supplement_budget):
+                if supplement_budget_used >= int(local_grid_supplement_budget):
                     break
             area = float(getattr(block, "area", 0.0) or 0.0)
             if area < max(local_spacing_m * local_spacing_m * 3.0, 4_000.0):
@@ -1571,7 +2053,7 @@ def _generate_hierarchy_linework(
             geom = _subtract_river_setback(block, river_union, river_setback_m)
             for part in _iter_polys_geom(geom):
                 if local_backend == "classic_sprawl" and local_need_grid_supplement and local_grid_supplement_budget is not None:
-                    if supplement_added >= int(local_grid_supplement_budget):
+                    if supplement_budget_used >= int(local_grid_supplement_budget):
                         break
                 part_area = float(getattr(part, "area", 0.0) or 0.0)
                 if part_area < max(local_spacing_m * local_spacing_m * 2.0, 3_000.0):
@@ -1582,13 +2064,22 @@ def _generate_hierarchy_linework(
                 if (bi % 2) == 1:
                     angle += 90.0
                 angle = _styled_axis_angle_deg(angle, style, rng, "local")
-                max_lines = int(min(36, max(1, part_area / max(local_spacing_m * local_spacing_m * 3.0, 1.0))))
+                max_lines_cap = 96 if supplement_using_coverage_polys else 36
+                density_divisor = 2.0 if supplement_using_coverage_polys else 3.0
+                max_lines = int(min(max_lines_cap, max(1, part_area / max(local_spacing_m * local_spacing_m * density_divisor, 1.0))))
                 if local_backend == "classic_sprawl" and local_need_grid_supplement and local_grid_supplement_budget is not None:
-                    remaining = max(0, int(local_grid_supplement_budget) - supplement_added)
+                    remaining = max(0, int(local_grid_supplement_budget) - supplement_budget_used)
                     if remaining <= 0:
                         break
-                    # In supplement mode, add sparse connectors instead of fully striping each residual block.
-                    max_lines = int(max(1, min(max_lines, 2, remaining)))
+                    if supplement_using_coverage_polys:
+                        # Coverage-first supplement is allowed to stripe uncovered
+                        # polygons densely (within the global budget) rather than
+                        # the legacy sparse-connector cap of 2 lines per polygon.
+                        max_lines = int(max(1, min(max_lines, remaining)))
+                    else:
+                        # Legacy density supplement for classic-sprawl underfill:
+                        # add sparse connectors instead of fully striping each block.
+                        max_lines = int(max(1, min(max_lines, 2, remaining)))
                 lines = _parallel_lines_in_polygon(
                     part,
                     spacing_m=float(local_spacing_m),
@@ -1613,7 +2104,7 @@ def _generate_hierarchy_linework(
                             "pts": pts,
                             "cul": False,
                             "meta": {
-                                "block_idx": int(bi),
+                                "block_idx": int(bi) if not supplement_using_coverage_polys else -1,
                                 "is_spine_candidate": bool(_polyline_length(pts) >= max(local_reroute_min_length_m * 1.2, 110.0)),
                                 "connected_to_collector": bool(d_col <= max(local_reroute_collector_snap_bias_m * 1.5, 40.0)),
                                 "culdesac": False,
@@ -1621,24 +2112,32 @@ def _generate_hierarchy_linework(
                             "is_grid_supplement": True,
                             "flags": {"local_grid_supplement"},
                             "length_m": _polyline_length(pts),
+                            "continuity_id": _new_local_continuity_id(prefix="local-grid"),
+                            "parent_continuity_id": None,
+                            "segment_order": None,
                         }
                     )
                     local_added += 1
-                    supplement_added += 1
+                    supplement_budget_used += 1
+                    grid_supplement_added += 1
+                    if supplement_using_coverage_polys:
+                        local_coverage_supplement_added_count += 1
                     if local_backend == "classic_sprawl" and local_need_grid_supplement and local_grid_supplement_budget is not None:
-                        if supplement_added >= int(local_grid_supplement_budget):
+                        if supplement_budget_used >= int(local_grid_supplement_budget):
                             break
         if local_backend != "classic_sprawl":
             notes.append("local_generator:grid_clip")
         else:
-            notes.append("local_generator_grid_clip_supplement:1")
+            if grid_supplement_added > 0:
+                notes.append("local_generator_grid_clip_supplement:1")
             if local_grid_supplement_budget is not None:
                 notes.append(f"local_generator_grid_clip_supplement_budget:{int(local_grid_supplement_budget)}")
-                notes.append(f"local_generator_grid_clip_supplement_added:{int(supplement_added)}")
+                notes.append(f"local_generator_grid_clip_supplement_added:{int(grid_supplement_added)}")
     else:
         notes.append("local_generator:classic_sprawl")
     if local_backend == "classic_sprawl" and local_need_grid_supplement:
         notes.append("local_generator:classic_sprawl")
+    numeric["road_hierarchy_local_grid_supplement_ms"] = float((perf_counter() - t_local_grid_supp_start) * 1000.0)
 
     # Hybrid local geometry reroute: keep classic/local topology but reroute selected geometries
     reroute_applied = 0
@@ -1650,6 +2149,7 @@ def _generate_hierarchy_linework(
     reroute_length_gain_n = 0
     reroute_rejected_noodle = 0
     reroute_rejected_gain = 0
+    t_local_reroute_start = perf_counter()
     if pending_local_entries and str(local_geometry_mode or "classic_sprawl_rerouted").lower() != "trace_direct":
         try:
             from engine.roads.local_reroute import (  # type: ignore
@@ -1778,6 +2278,7 @@ def _generate_hierarchy_linework(
                 notes.append(f"local_reroute_coverage:{str(local_reroute_coverage)}")
                 if reroute_rejected_noodle > 0:
                     notes.append(f"local_reroute_rejected_noodle:{reroute_rejected_noodle}")
+    numeric["road_hierarchy_local_reroute_ms"] = float((perf_counter() - t_local_reroute_start) * 1000.0)
 
     numeric["local_reroute_candidate_count"] = float(reroute_candidate_count)
     numeric["local_reroute_applied_count"] = float(reroute_applied)
@@ -1790,14 +2291,17 @@ def _generate_hierarchy_linework(
     numeric["local_reroute_rejected_noodle_count"] = float(reroute_rejected_noodle)
     numeric["local_reroute_rejected_gain_count"] = float(reroute_rejected_gain)
     numeric["local_grid_supplement_budget"] = float(local_grid_supplement_budget or 0)
-    numeric["local_grid_supplement_added_count"] = float(supplement_added)
+    numeric["local_grid_supplement_added_count"] = float(grid_supplement_added)
+    numeric["local_frontier_supplement_added_count"] = float(frontier_supplement_added)
+    numeric["local_coverage_supplement_added_count"] = float(local_coverage_supplement_added_count)
     numeric["local_grid_supplement_used_ratio"] = (
-        float(supplement_added / max(int(local_grid_supplement_budget or 0), 1))
+        float(grid_supplement_added / max(int(local_grid_supplement_budget or 0), 1))
         if local_grid_supplement_budget is not None
         else 0.0
     )
 
     # Append local edges after optional reroute so intersections see final local geometry.
+    t_local_append_start = perf_counter()
     for entry in pending_local_entries:
         entry_flags = set(entry.get("flags", set()) or set())
         cul = bool(entry.get("cul", False) or ("culdesac" in entry_flags))
@@ -1808,6 +2312,9 @@ def _generate_hierarchy_linework(
             road_class="local",
             width_m=6.0,
             render_order=2,
+            continuity_id=(str(entry.get("continuity_id")) if entry.get("continuity_id") is not None else None),
+            parent_continuity_id=(str(entry.get("parent_continuity_id")) if entry.get("parent_continuity_id") is not None else None),
+            segment_order=(int(entry.get("segment_order")) if entry.get("segment_order") is not None else None),
             edge_id_suffix="-cul" if cul else "",
             edge_flags=entry_flags or None,
             nodes=nodes,
@@ -1819,7 +2326,28 @@ def _generate_hierarchy_linework(
             river_cross_penalty=river_cross_penalty * 1.25,
             stream_cb=stream_cb,
         )
+    numeric["road_hierarchy_local_append_ms"] = float((perf_counter() - t_local_append_start) * 1000.0)
+    t_local_coverage_final_start = perf_counter()
+    local_coverage_stats_final = _compute_local_coverage_stats(
+        nodes=nodes,
+        edges=edges,
+        local_blocks=local_blocks,
+        river_union=river_union,
+        river_setback_m=float(river_setback_m),
+        coverage_radius_m=float(local_coverage_radius_m),
+        pending_local_entries=None,
+        uncovered_min_area_m2=max(float(local_spacing_m) * float(local_spacing_m) * 1.25, 2_000.0),
+    )
+    if local_coverage_stats_final and float(local_coverage_stats_final.get("buildable_area_m2", 0.0) or 0.0) <= 0.0:
+        local_coverage_stats_final = local_coverage_stats_pre or local_coverage_stats_final
+    if local_coverage_stats_final:
+        numeric["local_buildable_area_m2"] = float(local_coverage_stats_final.get("buildable_area_m2", 0.0) or 0.0)
+        numeric["local_coverage_radius_m"] = float(local_coverage_stats_final.get("coverage_radius_m", 0.0) or 0.0)
+        numeric["local_coverage_ratio"] = float(local_coverage_stats_final.get("coverage_ratio", 0.0) or 0.0)
+        numeric["local_uncovered_area_m2"] = float(local_coverage_stats_final.get("uncovered_area_m2", 0.0) or 0.0)
+    numeric["road_hierarchy_local_coverage_final_ms"] = float((perf_counter() - t_local_coverage_final_start) * 1000.0)
     numeric["local_added_count"] = float(local_added)
+    numeric["road_hierarchy_total_ms"] = float((perf_counter() - hierarchy_t0) * 1000.0)
     return notes, numeric
 
 
@@ -1877,6 +2405,15 @@ def _dedupe_and_snap(
                 render_order=deduped_edges[idx].render_order,
                 path_points=deduped_edges[idx].path_points,
                 flags=merged_flags,
+                continuity_id=_coalesce_optional_str(
+                    _edge_continuity_id(deduped_edges[idx]),
+                    _edge_continuity_id(edge),
+                ),
+                parent_continuity_id=_coalesce_optional_str(
+                    _edge_parent_continuity_id(deduped_edges[idx]),
+                    _edge_parent_continuity_id(edge),
+                ),
+                segment_order=None,
             )
             continue
         idx = len(deduped_edges)
@@ -1895,6 +2432,9 @@ def _dedupe_and_snap(
                 render_order=edge.render_order,
                 path_points=edge.path_points,
                 flags=flags,
+                continuity_id=_edge_continuity_id(edge),
+                parent_continuity_id=_edge_parent_continuity_id(edge),
+                segment_order=None,
             )
         )
 
@@ -1938,6 +2478,146 @@ def _illegal_intersection_count(nodes: Sequence[BuiltRoadNode], edges: Sequence[
         segs[key] = seg
         owners[key] = edge
     return count
+
+
+def _edge_points_for_ordering(edge: BuiltRoadEdge, node_lookup: Dict[str, BuiltRoadNode]) -> List[Vec2]:
+    pts = list(getattr(edge, "path_points", []) or [])
+    if len(pts) >= 2:
+        return pts
+    u = node_lookup.get(str(getattr(edge, "u", "")))
+    v = node_lookup.get(str(getattr(edge, "v", "")))
+    if u is None or v is None:
+        return []
+    return [u.pos, v.pos]
+
+
+def _edge_travel_dir_from_node(edge: BuiltRoadEdge, node_id: str, node_lookup: Dict[str, BuiltRoadNode]) -> Optional[Vec2]:
+    pts = _edge_points_for_ordering(edge, node_lookup)
+    if len(pts) < 2:
+        return None
+    if str(getattr(edge, "u", "")) == str(node_id):
+        seq = pts
+    elif str(getattr(edge, "v", "")) == str(node_id):
+        seq = list(reversed(pts))
+    else:
+        seq = pts
+    base = seq[0]
+    for i in range(1, len(seq)):
+        d = (seq[i] - base).normalized()
+        if d.length() > 1e-9:
+            return d
+    return None
+
+
+def _node_sort_key_for_continuity(node_id: str, node_lookup: Dict[str, BuiltRoadNode]) -> Tuple[float, float, str]:
+    node = node_lookup.get(str(node_id))
+    if node is None:
+        return (float("inf"), float("inf"), str(node_id))
+    return (float(node.pos.x), float(node.pos.y), str(node_id))
+
+
+def _recompute_local_continuity_orders(
+    nodes: Sequence[BuiltRoadNode],
+    edges: List[BuiltRoadEdge],
+) -> Dict[str, float]:
+    node_lookup = {str(n.id): n for n in nodes}
+    auto_assigned = 0
+    groups: Dict[str, List[int]] = {}
+    local_edge_count = 0
+
+    for idx, edge in enumerate(edges):
+        if str(getattr(edge, "road_class", "")) != "local":
+            try:
+                edge.segment_order = None
+            except Exception:
+                pass
+            continue
+        local_edge_count += 1
+        cid = _edge_continuity_id(edge)
+        if cid is None:
+            cid = f"local-auto-{idx}"
+            try:
+                edge.continuity_id = cid
+                if getattr(edge, "parent_continuity_id", None) is None:
+                    edge.parent_continuity_id = None
+            except Exception:
+                pass
+            auto_assigned += 1
+        try:
+            edge.segment_order = None
+        except Exception:
+            pass
+        groups.setdefault(cid, []).append(idx)
+
+    for cid, idxs in groups.items():
+        _ = cid
+        if not idxs:
+            continue
+        adj: Dict[str, List[int]] = {}
+        deg: Dict[str, int] = {}
+        for ei in idxs:
+            edge = edges[ei]
+            u = str(edge.u)
+            v = str(edge.v)
+            adj.setdefault(u, []).append(ei)
+            adj.setdefault(v, []).append(ei)
+        deg = {nid: len(eis) for nid, eis in adj.items()}
+        unvisited = set(int(i) for i in idxs)
+        order_counter = 0
+
+        while unvisited:
+            # Pick a deterministic component start preferring leaf endpoints.
+            best_start: Optional[Tuple[Tuple[int, float, float, str, str], int, str]] = None
+            for ei in sorted(unvisited):
+                e = edges[ei]
+                for nid in (str(e.u), str(e.v)):
+                    nx, ny, ns = _node_sort_key_for_continuity(nid, node_lookup)
+                    score = (0 if int(deg.get(nid, 0)) == 1 else 1, nx, ny, str(e.id), nid)
+                    cand = (score, ei, nid)
+                    if best_start is None or cand[0] < best_start[0]:
+                        best_start = cand
+            if best_start is None:
+                break
+            current_node = str(best_start[2])
+            prev_dir: Optional[Vec2] = None
+
+            while True:
+                candidates = [ei for ei in adj.get(current_node, []) if ei in unvisited]
+                if not candidates:
+                    break
+
+                def _candidate_key(ei: int) -> Tuple[float, str]:
+                    edge = edges[ei]
+                    if prev_dir is None:
+                        return (0.0, str(edge.id))
+                    d = _edge_travel_dir_from_node(edge, current_node, node_lookup)
+                    if d is None:
+                        return (2.0, str(edge.id))
+                    return (-float(max(-1.0, min(1.0, prev_dir.dot(d)))), str(edge.id))
+
+                next_ei = min(candidates, key=_candidate_key)
+                edge = edges[next_ei]
+                try:
+                    edge.segment_order = int(order_counter)
+                except Exception:
+                    pass
+                order_counter += 1
+                unvisited.discard(next_ei)
+
+                if str(edge.u) == current_node:
+                    next_node = str(edge.v)
+                elif str(edge.v) == current_node:
+                    next_node = str(edge.u)
+                else:
+                    next_node = str(edge.v)
+                prev_dir = _edge_travel_dir_from_node(edge, current_node, node_lookup)
+                current_node = next_node
+
+    return {
+        "local_continuity_group_count": float(len(groups)),
+        "local_edges_with_continuity_count": float(sum(len(v) for v in groups.values())),
+        "local_auto_continuity_assigned_count": float(auto_assigned),
+    }
 
 
 def _metrics(nodes: List[BuiltRoadNode], edges: List[BuiltRoadEdge], extra: Dict[str, int]) -> Dict[str, float]:
@@ -2067,6 +2747,15 @@ def generate_roads(
     progress_cb: Optional[RoadProgressCallback] = None,
     stream_cb: Optional[RoadStreamCallback] = None,
 ) -> RoadBuildResult:
+    road_total_t0 = perf_counter()
+    phase_ms: Dict[str, float] = {}
+
+    def _phase_start() -> float:
+        return perf_counter()
+
+    def _phase_end(name: str, started_at: float) -> None:
+        phase_ms[name] = float((perf_counter() - started_at) * 1000.0)
+
     # Deprecated compatibility alias: keep accepting tensor-streamline config names while routing
     # collector generation through the classic turtle growth backend.
     if (collector_generator or "").lower() == "tensor_streamline":
@@ -2087,6 +2776,7 @@ def generate_roads(
         metrics = _metrics(nodes, [], {"duplicate_edge_count": 0, "zero_length_edge_count": 0})
         return RoadBuildResult(nodes=nodes, edges=[], candidate_debug=[], metrics=metrics)
 
+    t_phase = _phase_start()
     graph, candidate_debug = _build_candidate_graph(
         hubs=hubs,
         extent_m=extent_m,
@@ -2096,9 +2786,12 @@ def generate_roads(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
     )
+    _phase_end("road_phase_candidate_graph_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.candidate_graph", 0.08, "Built road candidate graph")
 
+    t_phase = _phase_start()
     selected_backbone = _generate_backbone_edges(graph, loop_budget=loop_budget)
+    _phase_end("road_phase_backbone_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.backbone", 0.16, "Selected arterial backbone")
     edges: List[BuiltRoadEdge] = []
     for u, v, data in selected_backbone:
@@ -2116,6 +2809,7 @@ def generate_roads(
             )
         )
 
+    t_phase = _phase_start()
     _generate_branches(
         hubs=hubs,
         nodes=nodes,
@@ -2129,10 +2823,14 @@ def generate_roads(
         seed=seed,
         stream_cb=stream_cb,
     )
+    _phase_end("road_phase_branches_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.branches", 0.24, "Generated branch roads")
 
+    t_phase = _phase_start()
     nodes, edges, extra = _dedupe_and_snap(nodes, edges)
+    _phase_end("road_phase_dedupe_initial_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.snap", 0.30, "Snapped and deduplicated backbone/branches")
+    t_phase = _phase_start()
     _route_all_edges(
         nodes=nodes,
         edges=edges,
@@ -2142,7 +2840,9 @@ def generate_roads(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
     )
+    _phase_end("road_phase_route_initial_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.route_initial", 0.40, "Routed arterial and branch geometry")
+    t_phase = _phase_start()
     hierarchy_notes, hierarchy_numeric = _generate_hierarchy_linework(
         extent_m=extent_m,
         height=height,
@@ -2229,7 +2929,9 @@ def generate_roads(
         river_areas=river_areas,
         stream_cb=stream_cb,
     )
+    _phase_end("road_phase_hierarchy_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.hierarchy", 0.72, "Generated collector and local hierarchy")
+    t_phase = _phase_start()
     try:
         from engine.roads.intersections import apply_intersection_operators  # type: ignore
     except Exception:
@@ -2244,7 +2946,9 @@ def generate_roads(
             split_tolerance_m=float(intersection_split_tolerance_m),
             min_dangle_length_m=float(min_dangle_length_m),
         )
+    _phase_end("road_phase_intersections_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.intersections", 0.82, "Applied intersection operators")
+    t_phase = _phase_start()
     try:
         from engine.roads.syntax import apply_syntax_postprocess  # type: ignore
     except Exception:
@@ -2259,12 +2963,16 @@ def generate_roads(
             prune_low_choice_collectors=bool(syntax_prune_low_choice_collectors),
             prune_quantile=float(syntax_prune_quantile),
         )
+    _phase_end("road_phase_syntax_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.syntax", 0.88, "Applied space syntax postprocess")
+    t_phase = _phase_start()
     nodes, edges, extra2 = _dedupe_and_snap(nodes, edges)
+    _phase_end("road_phase_dedupe_final_ms", t_phase)
     extra = {
         "duplicate_edge_count": int(extra.get("duplicate_edge_count", 0)) + int(extra2.get("duplicate_edge_count", 0)),
         "zero_length_edge_count": int(extra.get("zero_length_edge_count", 0)) + int(extra2.get("zero_length_edge_count", 0)),
     }
+    t_phase = _phase_start()
     _route_all_edges(
         nodes=nodes,
         edges=edges,
@@ -2274,9 +2982,14 @@ def generate_roads(
         slope_penalty=slope_penalty,
         river_cross_penalty=river_cross_penalty,
     )
+    _phase_end("road_phase_route_final_ms", t_phase)
+    t_phase = _phase_start()
+    continuity_numeric = _recompute_local_continuity_orders(nodes, edges)
+    _phase_end("road_phase_continuity_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.route_final", 0.94, "Finalized routed road geometry")
 
     # Street-run aggregation: aggregate fragmented edges into semantically continuous street segments
+    t_phase = _phase_start()
     street_run_metrics_data: dict[str, float] = {}
     try:
         from engine.roads.street_run import (
@@ -2292,6 +3005,7 @@ def generate_roads(
         street_run_metrics_data.update(calc_class_metrics(street_runs))
     except Exception:
         street_run_metrics_data["street_run_aggregation_failed"] = 1.0
+    _phase_end("road_phase_street_runs_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.street_runs", 0.97, "Aggregated street runs")
 
     local_cul_final = sum(1 for e in edges if str(getattr(e, "road_class", "")) == "local" and _has_edge_flag(e, "culdesac"))
@@ -2309,6 +3023,9 @@ def generate_roads(
     metrics.update({k: float(v) for k, v in inter_numeric.items()})
     metrics.update({k: float(v) for k, v in syntax_numeric.items()})
     metrics.update({k: float(v) for k, v in street_run_metrics_data.items()})
+    metrics.update({k: float(v) for k, v in continuity_numeric.items()})
+    metrics.update({k: float(v) for k, v in phase_ms.items()})
+    metrics["road_phase_total_ms"] = float((perf_counter() - road_total_t0) * 1000.0)
     metrics["local_culdesac_edge_count_final"] = float(local_cul_final)
     local_cul_pre = float(metrics.get("local_culdesac_edge_count_pre_topology", 0.0))
     metrics["local_culdesac_preserved_ratio"] = float(local_cul_final / local_cul_pre) if local_cul_pre > 0.0 else 0.0

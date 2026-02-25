@@ -56,6 +56,19 @@ def test_hierarchical_roads_emit_collector_and_dense_locals():
     assert artifact.metrics.local_culdesac_preserved_ratio > 0.0
     assert artifact.metrics.local_reroute_applied_count > 0
     assert artifact.metrics.local_two_point_edge_ratio < 0.98
+    assert artifact.metrics.local_buildable_area_m2 is not None
+    assert artifact.metrics.local_buildable_area_m2 > 0.0
+    assert artifact.metrics.local_coverage_ratio is not None
+    assert artifact.metrics.local_coverage_ratio >= 0.90
+    assert artifact.metrics.local_frontier_supplement_added_count is not None
+    assert artifact.metrics.local_frontier_supplement_added_count > 0
+    assert artifact.metrics.local_uncovered_area_m2 is not None
+    assert artifact.metrics.local_uncovered_area_m2 >= 0.0
+    assert artifact.metrics.local_uncovered_area_m2 < artifact.metrics.local_buildable_area_m2
+    assert artifact.metrics.local_coverage_radius_m is not None
+    assert artifact.metrics.local_coverage_radius_m >= 90.0
+    assert artifact.metrics.local_classic_stop_road_too_far_count == 0
     assert any("Collector generator: classic_turtle" in n or "Collector generator: grid_clip" in n for n in artifact.metrics.notes)
     assert any("Local generator:" in n for n in artifact.metrics.notes)
     assert any("local geometry reroute" in n.lower() for n in artifact.metrics.notes)
+    assert any("Local road coverage (buildable area):" in n for n in artifact.metrics.notes)

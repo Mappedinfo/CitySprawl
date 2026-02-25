@@ -583,6 +583,9 @@ def _build_city_artifact_from_core(
             width_m=float(getattr(e, "width_m", 8.0)),
             render_order=int(getattr(e, "render_order", 1)),
             path_points=[Point2D(x=float(p.x), y=float(p.y)) for p in getattr(e, "path_points", [])] or None,
+            continuity_id=str(getattr(e, "continuity_id")) if getattr(e, "continuity_id", None) is not None else None,
+            parent_continuity_id=str(getattr(e, "parent_continuity_id")) if getattr(e, "parent_continuity_id", None) is not None else None,
+            segment_order=int(getattr(e, "segment_order")) if getattr(e, "segment_order", None) is not None else None,
         )
         for e in ctx.road_result.edges
     ]
@@ -676,6 +679,44 @@ def _build_city_artifact_from_core(
         metric_notes.append(
             f"Local two-point edge ratio: {float(metric_values.get('local_two_point_edge_ratio', 0.0)):.2f}"
         )
+    local_cov_ratio = float(metric_values.get("local_coverage_ratio", 0.0))
+    local_cov_area = float(metric_values.get("local_buildable_area_m2", 0.0))
+    local_uncovered_area = float(metric_values.get("local_uncovered_area_m2", 0.0))
+    local_cov_radius = float(metric_values.get("local_coverage_radius_m", 0.0))
+    if local_cov_area > 0.0:
+        metric_notes.append(
+            "Local road coverage (buildable area): "
+            f"{local_cov_ratio:.2f} (uncovered={int(round(local_uncovered_area))} m2, "
+            f"radius={int(round(local_cov_radius))}m)"
+        )
+    stop_reason_keys = (
+        ("near_network", "local_classic_stop_near_network_count"),
+        ("block_exit", "local_classic_stop_block_exit_count"),
+        ("stochastic_stop", "local_classic_stop_stochastic_stop_count"),
+        ("road_too_far", "local_classic_stop_road_too_far_count"),
+        ("river_blocked", "local_classic_stop_river_blocked_count"),
+        ("span_cap", "local_classic_stop_span_cap_count"),
+    )
+    stop_parts = [
+        f"{label}={int(metric_values.get(key, 0.0))}"
+        for label, key in stop_reason_keys
+        if int(metric_values.get(key, 0.0)) > 0
+    ]
+    if stop_parts:
+        metric_notes.append("Classic local stop reasons: " + ", ".join(stop_parts))
+    contact_mode_keys = (
+        ("opposing", "local_classic_contact_opposing_count"),
+        ("parallel", "local_classic_contact_parallel_count"),
+        ("perpendicular_continue", "local_classic_contact_perpendicular_continue_count"),
+        ("oblique_continue", "local_classic_contact_oblique_continue_count"),
+    )
+    contact_parts = [
+        f"{label}={int(metric_values.get(key, 0.0))}"
+        for label, key in contact_mode_keys
+        if int(metric_values.get(key, 0.0)) > 0
+    ]
+    if contact_parts:
+        metric_notes.append("Classic local contact modes: " + ", ".join(contact_parts))
     supplement_budget = int(metric_values.get("local_grid_supplement_budget", 0.0))
     if supplement_budget > 0:
         supplement_added = int(metric_values.get("local_grid_supplement_added_count", 0.0))
@@ -683,6 +724,56 @@ def _build_city_artifact_from_core(
         metric_notes.append(
             f"Local grid supplement (budgeted): {supplement_added}/{supplement_budget} (ratio={supplement_used_ratio:.2f})"
         )
+    local_cov_supplement_added = int(metric_values.get("local_coverage_supplement_added_count", 0.0))
+    if local_cov_supplement_added > 0:
+        metric_notes.append(f"Local coverage supplement added edges: {local_cov_supplement_added}")
+    local_frontier_supplement_added = int(metric_values.get("local_frontier_supplement_added_count", 0.0))
+    if local_frontier_supplement_added > 0:
+        metric_notes.append(f"Local frontier supplement added edges: {local_frontier_supplement_added}")
+    road_phase_keys = (
+        ("candidate", "road_phase_candidate_graph_ms"),
+        ("backbone", "road_phase_backbone_ms"),
+        ("branches", "road_phase_branches_ms"),
+        ("dedupe_initial", "road_phase_dedupe_initial_ms"),
+        ("route_initial", "road_phase_route_initial_ms"),
+        ("hierarchy", "road_phase_hierarchy_ms"),
+        ("intersections", "road_phase_intersections_ms"),
+        ("syntax", "road_phase_syntax_ms"),
+        ("dedupe_final", "road_phase_dedupe_final_ms"),
+        ("route_final", "road_phase_route_final_ms"),
+        ("continuity", "road_phase_continuity_ms"),
+        ("street_runs", "road_phase_street_runs_ms"),
+    )
+    road_phase_parts = [
+        f"{label}={int(round(float(metric_values.get(key, 0.0))))}ms"
+        for label, key in road_phase_keys
+        if float(metric_values.get(key, 0.0)) > 0.0
+    ]
+    road_phase_total_ms = float(metric_values.get("road_phase_total_ms", 0.0))
+    if road_phase_parts:
+        metric_notes.append("Road phase timings: " + ", ".join(road_phase_parts))
+    if road_phase_total_ms > 0.0:
+        metric_notes.append(f"Road pipeline total: {int(round(road_phase_total_ms))}ms")
+    hierarchy_timing_keys = (
+        ("collector", "road_hierarchy_collector_ms"),
+        ("local_classic", "road_hierarchy_local_classic_ms"),
+        ("cov_pre", "road_hierarchy_local_coverage_pre_ms"),
+        ("frontier_supp", "road_hierarchy_local_frontier_supplement_ms"),
+        ("grid_supp", "road_hierarchy_local_grid_supplement_ms"),
+        ("reroute", "road_hierarchy_local_reroute_ms"),
+        ("append", "road_hierarchy_local_append_ms"),
+        ("cov_final", "road_hierarchy_local_coverage_final_ms"),
+    )
+    hierarchy_phase_parts = [
+        f"{label}={int(round(float(metric_values.get(key, 0.0))))}ms"
+        for label, key in hierarchy_timing_keys
+        if float(metric_values.get(key, 0.0)) > 0.0
+    ]
+    hierarchy_total_ms = float(metric_values.get("road_hierarchy_total_ms", 0.0))
+    if hierarchy_phase_parts:
+        metric_notes.append("Road hierarchy timings: " + ", ".join(hierarchy_phase_parts))
+    if hierarchy_total_ms > 0.0:
+        metric_notes.append(f"Road hierarchy total: {int(round(hierarchy_total_ms))}ms")
     local_cul_final = int(metric_values.get("local_culdesac_edge_count_final", 0.0))
     local_cul_pre = int(metric_values.get("local_culdesac_edge_count_pre_topology", 0.0))
     if local_cul_pre > 0 or local_cul_final > 0:
@@ -740,6 +831,67 @@ def _build_city_artifact_from_core(
         local_two_point_edge_ratio=float(metric_values.get("local_two_point_edge_ratio", 0.0)),
         local_reroute_avg_path_points=float(metric_values.get("local_reroute_avg_path_points", 0.0)),
         local_reroute_avg_length_gain_ratio=float(metric_values.get("local_reroute_avg_length_gain_ratio", 0.0)),
+        local_buildable_area_m2=float(metric_values.get("local_buildable_area_m2", 0.0))
+        if "local_buildable_area_m2" in metric_values
+        else None,
+        local_coverage_radius_m=float(metric_values.get("local_coverage_radius_m", 0.0))
+        if "local_coverage_radius_m" in metric_values
+        else None,
+        local_coverage_ratio=float(metric_values.get("local_coverage_ratio", 0.0))
+        if "local_coverage_ratio" in metric_values
+        else None,
+        local_uncovered_area_m2=float(metric_values.get("local_uncovered_area_m2", 0.0))
+        if "local_uncovered_area_m2" in metric_values
+        else None,
+        local_coverage_supplement_added_count=int(metric_values.get("local_coverage_supplement_added_count", 0.0))
+        if "local_coverage_supplement_added_count" in metric_values
+        else None,
+        local_frontier_supplement_added_count=int(metric_values.get("local_frontier_supplement_added_count", 0.0))
+        if "local_frontier_supplement_added_count" in metric_values
+        else None,
+        local_grid_supplement_budget=int(metric_values.get("local_grid_supplement_budget", 0.0))
+        if "local_grid_supplement_budget" in metric_values
+        else None,
+        local_grid_supplement_added_count=int(metric_values.get("local_grid_supplement_added_count", 0.0))
+        if "local_grid_supplement_added_count" in metric_values
+        else None,
+        local_grid_supplement_used_ratio=float(metric_values.get("local_grid_supplement_used_ratio", 0.0))
+        if "local_grid_supplement_used_ratio" in metric_values
+        else None,
+        local_classic_stop_near_network_count=int(metric_values.get("local_classic_stop_near_network_count", 0.0))
+        if "local_classic_stop_near_network_count" in metric_values
+        else None,
+        local_classic_stop_block_exit_count=int(metric_values.get("local_classic_stop_block_exit_count", 0.0))
+        if "local_classic_stop_block_exit_count" in metric_values
+        else None,
+        local_classic_stop_stochastic_stop_count=int(metric_values.get("local_classic_stop_stochastic_stop_count", 0.0))
+        if "local_classic_stop_stochastic_stop_count" in metric_values
+        else None,
+        local_classic_stop_road_too_far_count=int(metric_values.get("local_classic_stop_road_too_far_count", 0.0))
+        if "local_classic_stop_road_too_far_count" in metric_values
+        else None,
+        local_classic_stop_river_blocked_count=int(metric_values.get("local_classic_stop_river_blocked_count", 0.0))
+        if "local_classic_stop_river_blocked_count" in metric_values
+        else None,
+        local_classic_stop_span_cap_count=int(metric_values.get("local_classic_stop_span_cap_count", 0.0))
+        if "local_classic_stop_span_cap_count" in metric_values
+        else None,
+        local_classic_contact_opposing_count=int(metric_values.get("local_classic_contact_opposing_count", 0.0))
+        if "local_classic_contact_opposing_count" in metric_values
+        else None,
+        local_classic_contact_parallel_count=int(metric_values.get("local_classic_contact_parallel_count", 0.0))
+        if "local_classic_contact_parallel_count" in metric_values
+        else None,
+        local_classic_contact_perpendicular_continue_count=int(
+            metric_values.get("local_classic_contact_perpendicular_continue_count", 0.0)
+        )
+        if "local_classic_contact_perpendicular_continue_count" in metric_values
+        else None,
+        local_classic_contact_oblique_continue_count=int(
+            metric_values.get("local_classic_contact_oblique_continue_count", 0.0)
+        )
+        if "local_classic_contact_oblique_continue_count" in metric_values
+        else None,
         generation_profile=str(getattr(config.quality, "profile", "balanced")),
         degraded_mode=False,
         notes=metric_notes,

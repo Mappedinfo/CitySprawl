@@ -208,6 +208,12 @@ export function canonicalizePhaseId(phase: string): string {
   return PHASE_ALIASES[normalized] ?? normalized;
 }
 
+export function getInitialPreviewStageTimestampMs(phaseLike: string | null | undefined): number {
+  const canonical = canonicalizePhaseId(String(phaseLike ?? ''));
+  const def = UNIFIED_STAGE_DEF_BY_ID.get(canonical as CanonicalStageId) ?? UNIFIED_STAGE_DEF_BY_ID.get('done');
+  return def?.timestampMs ?? (UNIFIED_STAGE_DEFS[UNIFIED_STAGE_DEFS.length - 1]?.timestampMs ?? 20_000);
+}
+
 export function normalizeStagesForUi(stages: StageArtifact[]): StageArtifact[] {
   if (!stages.length) return stages;
   const stageIds = stages.map((s) => String(s.stage_id));

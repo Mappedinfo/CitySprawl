@@ -51,11 +51,21 @@ def _rebuild_edge_like(
         width_m=float(getattr(edge, "width_m")),
         render_order=int(getattr(edge, "render_order")),
         path_points=path_points if path_points is not None else getattr(edge, "path_points"),
+        continuity_id=getattr(edge, "continuity_id", None),
+        parent_continuity_id=getattr(edge, "parent_continuity_id", None),
+        segment_order=None,
     )
     try:
         return cls(flags=flags, **kwargs)
     except TypeError:
-        return cls(**kwargs)
+        slim = dict(kwargs)
+        slim.pop("continuity_id", None)
+        slim.pop("parent_continuity_id", None)
+        slim.pop("segment_order", None)
+        try:
+            return cls(flags=flags, **slim)
+        except TypeError:
+            return cls(**slim)
 
 
 def _edge_points(edge: object, node_lookup: dict[str, object]) -> list[Vec2]:

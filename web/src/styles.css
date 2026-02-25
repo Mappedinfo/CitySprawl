@@ -182,12 +182,6 @@ button:disabled {
   accent-color: #5ceeff;
 }
 
-.checkbox-row.compact span {
-  text-transform: none;
-  font-size: 0.82rem;
-  color: var(--ink);
-}
-
 .layer-groups {
   display: grid;
   gap: 8px;
@@ -208,6 +202,11 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.layer-group-title.is-active-group {
+  color: rgba(166, 255, 208, 0.95);
+  text-shadow: 0 0 10px rgba(110, 255, 160, 0.22);
+}
+
 .layer-group-body {
   display: grid;
   gap: 1px;
@@ -216,7 +215,9 @@ button:disabled {
 .checkbox-row.compact.layer-item {
   margin: 2px 0;
   border-radius: 8px;
-  padding: 2px 4px;
+  padding: 3px 4px;
+  border: 1px solid transparent;
+  transition: border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
 }
 
 .checkbox-row.compact.layer-item.is-child {
@@ -239,6 +240,320 @@ button:disabled {
   text-transform: none;
   font-size: 0.82rem;
   color: var(--ink);
+}
+
+.layer-item-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.layer-item-legend {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 14px;
+}
+
+.layer-item.is-reached {
+  border-color: rgba(108, 223, 255, 0.08);
+}
+
+.layer-item.is-unreached {
+  opacity: 0.44;
+  border-color: rgba(108, 223, 255, 0.04);
+  background: rgba(8, 12, 20, 0.18);
+}
+
+.layer-item.is-unreached input {
+  cursor: not-allowed;
+}
+
+.layer-item.is-unreached .layer-item-label {
+  color: rgba(206, 220, 228, 0.45);
+}
+
+.layer-item.is-active-generating {
+  border-color: rgba(110, 255, 160, 0.34);
+  background: rgba(12, 24, 18, 0.44);
+  animation: layerActivePulse 1.15s ease-in-out infinite;
+}
+
+@keyframes layerActivePulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(110, 255, 160, 0.08) inset, 0 0 0 rgba(110, 255, 160, 0.0);
+    border-color: rgba(110, 255, 160, 0.26);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(110, 255, 160, 0.18) inset, 0 0 12px rgba(110, 255, 160, 0.16);
+    border-color: rgba(110, 255, 160, 0.46);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(110, 255, 160, 0.08) inset, 0 0 0 rgba(110, 255, 160, 0.0);
+    border-color: rgba(110, 255, 160, 0.26);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layer-item.is-active-generating {
+    animation: none;
+    box-shadow: 0 0 0 1px rgba(110, 255, 160, 0.14) inset;
+  }
+}
+
+.legend-glyph {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 12px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid rgba(170, 190, 210, 0.14);
+  background: rgba(8, 12, 18, 0.5);
+}
+
+.legend-terrain {
+  background: linear-gradient(135deg, rgba(46, 78, 64, 0.35), rgba(58, 96, 72, 0.16));
+}
+
+.legend-terrain-band {
+  position: absolute;
+  inset: -3px auto -3px auto;
+  width: 6px;
+  transform: rotate(25deg);
+  background: rgba(170, 210, 174, 0.18);
+}
+
+.legend-terrain-band.band-a {
+  left: 5px;
+}
+
+.legend-terrain-band.band-b {
+  left: 13px;
+  background: rgba(120, 180, 132, 0.22);
+}
+
+.legend-contours {
+  background: rgba(16, 28, 38, 0.55);
+  gap: 2px;
+}
+
+.legend-contours > span {
+  display: block;
+  width: 100%;
+  height: 1px;
+  background: rgba(126, 220, 255, 0.55);
+}
+
+.legend-analysis {
+  background: linear-gradient(
+    90deg,
+    rgba(26, 244, 180, 0.75) 0%,
+    rgba(255, 214, 86, 0.75) 52%,
+    rgba(255, 86, 90, 0.78) 100%
+  );
+}
+
+.legend-rivers {
+  background: rgba(68, 148, 208, 0.28);
+}
+
+.legend-river-line {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(96, 224, 255, 0.9);
+}
+
+.legend-polygon {
+  background: rgba(28, 44, 58, 0.45);
+}
+
+.legend-polygon-inner {
+  width: 16px;
+  height: 8px;
+  border-radius: 2px;
+  border: 1px solid rgba(120, 210, 255, 0.55);
+  background: rgba(118, 220, 255, 0.12);
+}
+
+.legend-polygon-parcels .legend-polygon-inner {
+  border-style: solid;
+  background:
+    linear-gradient(90deg, transparent 0 31%, rgba(120, 210, 255, 0.14) 31% 35%, transparent 35% 65%, rgba(120, 210, 255, 0.14) 65% 69%, transparent 69% 100%),
+    rgba(118, 220, 255, 0.08);
+}
+
+.legend-buildings {
+  background: rgba(28, 24, 22, 0.42);
+}
+
+.legend-bldg {
+  position: absolute;
+  bottom: 1px;
+  border-radius: 1px;
+  background: rgba(255, 196, 120, 0.75);
+}
+
+.legend-bldg.b1 {
+  left: 4px;
+  width: 4px;
+  height: 5px;
+}
+
+.legend-bldg.b2 {
+  left: 10px;
+  width: 5px;
+  height: 8px;
+  background: rgba(255, 170, 92, 0.82);
+}
+
+.legend-bldg.b3 {
+  left: 17px;
+  width: 3px;
+  height: 4px;
+  background: rgba(255, 214, 146, 0.82);
+}
+
+.legend-green {
+  background: rgba(24, 52, 34, 0.42);
+}
+
+.legend-green-leaf {
+  width: 14px;
+  height: 8px;
+  border-radius: 999px 999px 999px 2px;
+  transform: rotate(-18deg);
+  background: rgba(102, 242, 164, 0.72);
+  border: 1px solid rgba(128, 255, 190, 0.42);
+}
+
+.legend-major-roads {
+  background: rgba(18, 24, 30, 0.6);
+}
+
+.legend-road-major {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 999px;
+}
+
+.legend-road-major.line-a {
+  top: 3px;
+  height: 2px;
+  background: rgba(236, 246, 255, 0.95);
+}
+
+.legend-road-major.line-b {
+  bottom: 3px;
+  height: 2px;
+  background: rgba(194, 238, 255, 0.86);
+}
+
+.legend-local-roads {
+  background: rgba(16, 26, 36, 0.58);
+}
+
+.legend-road-local {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(136, 214, 245, 0.78);
+}
+
+.legend-ped-path {
+  background: rgba(16, 28, 24, 0.56);
+}
+
+.legend-ped-line {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(102, 230, 180, 0.9) 0 3px,
+    rgba(102, 230, 180, 0) 3px 6px
+  );
+}
+
+.legend-candidate {
+  background: rgba(18, 24, 30, 0.52);
+}
+
+.legend-candidate-line {
+  width: 18px;
+  height: 1px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(178, 198, 218, 0.8) 0 2px,
+    rgba(178, 198, 218, 0) 2px 4px
+  );
+}
+
+.legend-traffic {
+  background: rgba(18, 24, 30, 0.56);
+}
+
+.legend-traffic-line {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(96, 224, 255, 0.9), rgba(255, 218, 94, 0.92), rgba(255, 110, 96, 0.92));
+}
+
+.legend-resources {
+  background: rgba(16, 22, 28, 0.55);
+}
+
+.legend-dot {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+}
+
+.legend-dot.dot-a {
+  left: 4px;
+  background: rgba(94, 226, 255, 0.95);
+}
+
+.legend-dot.dot-b {
+  left: 10px;
+  background: rgba(124, 255, 176, 0.95);
+}
+
+.legend-dot.dot-c {
+  left: 16px;
+  background: rgba(255, 210, 100, 0.95);
+}
+
+.legend-labels {
+  background: rgba(18, 22, 28, 0.55);
+  justify-content: flex-start;
+  padding: 0 2px;
+  gap: 2px;
+}
+
+.legend-label-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 196, 88, 0.95);
+}
+
+.legend-label-text {
+  color: rgba(230, 240, 250, 0.88);
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 600;
 }
 
 .button-row {

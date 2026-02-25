@@ -17,7 +17,7 @@ import { heightGridToImageData } from './render/terrainImage';
 import { clampScale, screenToWorld, worldToScreen, type Viewport } from './render/viewport';
 import { TerrainScene } from './render3d/TerrainScene';
 import { composeFallbackStagedResponse } from './timeline/stageComposer';
-import { UNIFIED_STAGE_DEFS, canonicalizePhaseId, normalizeStagesForUi } from './timeline/unifiedStages';
+import { UNIFIED_STAGE_DEFS, canonicalizePhaseId, getInitialPreviewStageTimestampMs, normalizeStagesForUi } from './timeline/unifiedStages';
 import { useTimelinePlayer } from './timeline/useTimelinePlayer';
 import type {
   CityArtifact,
@@ -35,6 +35,7 @@ import { MetricsPanel } from './ui/MetricsPanel';
 import { NorthArrow } from './ui/NorthArrow';
 import { ScaleBar } from './ui/ScaleBar';
 import { StageInspector } from './ui/StageInspector';
+import { computeLayerUiStateFromGenerationPhase } from './ui/layerCatalog';
 
 const defaultConfig: GenerateConfig = {
   seed: 42,
@@ -79,6 +80,7 @@ const defaultConfig: GenerateConfig = {
 
 const TIMELINE_TOTAL_MS = UNIFIED_STAGE_DEFS[UNIFIED_STAGE_DEFS.length - 1]?.timestampMs ?? 20_000;
 const USE_THREE_TERRAIN = true;
+const GENERATION_LAYER_ACTIVE_STATUSES = new Set(['queued', 'running', 'streaming', 'connecting', 'fallback']);
 
 type StageSource = 'none' | 'v2' | 'staged' | 'fallback' | 'json';
 
@@ -353,11 +355,37 @@ export default function App() {
   const progressMessageLabel = stageProgressInPrimaryBar
     ? `${timeline.playing ? '展示回放中' : '展示已暂停'}，点击下方阶段可切换展示内容`
     : (displayGenerationProgress.message || 'Waiting for backend...');
+  const isGenerationLayerPhase = useMemo(() => {
+    if (sprawlProgressMode === 'progress+stages') return false;
+    if (loading || isStreaming) return true;
+    const status = String(generationProgress?.status ?? '').toLowerCase();
+    return GENERATION_LAYER_ACTIVE_STATUSES.has(status);
+  }, [sprawlProgressMode, loading, isStreaming, generationProgress?.status]);
+  const layerUiState = useMemo(
+    () =>
+      computeLayerUiStateFromGenerationPhase({
+        isGenerationPhase: isGenerationLayerPhase,
+        phase: generationProgress?.phase ?? null,
+        status: generationProgress?.status ?? null,
+        progress: generationProgress?.progress ?? null,
+      }),
+    [isGenerationLayerPhase, generationProgress?.phase, generationProgress?.status, generationProgress?.progress],
+  );
 
   const selectedHub = useMemo<HubRecord | null>(() => {
     if (!artifact || !selectedHubId) return null;
     return artifact.hubs.find((h) => h.id === selectedHubId) ?? null;
   }, [artifact, selectedHubId]);
+
+  const previewThenReplayTimeline = (runId: number, phaseLike?: string | null) => {
+    const previewTimestamp = getInitialPreviewStageTimestampMs(phaseLike);
+    timeline.setPlaying(false);
+    timeline.seek(previewTimestamp);
+    requestAnimationFrame(() => {
+      if (generateRunRef.current !== runId) return;
+      timeline.reset(true);
+    });
+  };
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -491,6 +519,7 @@ export default function App() {
           rect.width,
           rect.height,
           Date.now(),
+          USE_THREE_TERRAIN ? { ...layers, terrain: false } : layers,
         );
       }
     };
@@ -557,6 +586,7 @@ export default function App() {
           rect.width,
           rect.height,
           Date.now(),
+          USE_THREE_TERRAIN ? { ...layers, terrain: false } : layers,
         );
       }
 
@@ -720,7 +750,7 @@ export default function App() {
       } else {
         setViewport({ panX: 0, panY: 0, scale: 1 });
       }
-      timeline.reset(true);
+      previewThenReplayTimeline(runId, generationProgress?.phase || generationProgress?.status || 'done');
     } catch (e) {
       if (generateRunRef.current !== runId) return;
       setError(e instanceof Error ? e.message : String(e));
@@ -781,7 +811,7 @@ export default function App() {
       } else {
         setViewport({ panX: 0, panY: 0, scale: 1 });
       }
-      timeline.reset(true);
+      previewThenReplayTimeline(runId, generationProgress?.phase || generationProgress?.status || 'done');
     } catch (e) {
       if (generateRunRef.current !== runId) return;
       setGenerationProgress({
@@ -909,6 +939,7 @@ export default function App() {
         onLoadStagedJson={onLoadStagedJson}
         loading={loading}
         layers={layers}
+        layerUiState={layerUiState}
         onLayerToggle={onLayerToggle}
       />
 

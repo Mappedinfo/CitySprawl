@@ -478,6 +478,32 @@ export type StreamingTraceData = {
   rivers?: Array<{ river_id: string; centerline: Point2D[]; flow: number }>;
 };
 
+function hasAnyStreamingRoadLayersEnabled(layers: LayerToggles): boolean {
+  return Boolean(layers.majorRoads || layers.localRoads || layers.pedestrianPaths);
+}
+
+export function isStreamingRoadVisible(
+  layers: LayerToggles,
+  roadClass?: string,
+  traceId?: string,
+): boolean {
+  const cls = String(roadClass ?? '').toLowerCase();
+  if (cls === 'arterial' || cls === 'collector') return Boolean(layers.majorRoads);
+  if (cls === 'pedestrian') return Boolean(layers.pedestrianPaths);
+  if (cls === 'local' || cls === 'service') return Boolean(layers.localRoads);
+
+  const trace = String(traceId ?? '').toLowerCase();
+  if (trace) {
+    if (trace.startsWith('collector-trace-') || trace.startsWith('arterial-trace-') || trace.includes('collector')) {
+      return Boolean(layers.majorRoads);
+    }
+    if (trace.startsWith('local-trace-') || trace.includes('local')) return Boolean(layers.localRoads);
+    if (trace.includes('ped')) return Boolean(layers.pedestrianPaths);
+  }
+
+  return hasAnyStreamingRoadLayersEnabled(layers);
+}
+
 export function drawStreamingTraces(
   ctx: CanvasRenderingContext2D,
   data: StreamingTraceData,
@@ -486,6 +512,7 @@ export function drawStreamingTraces(
   cssWidth: number,
   cssHeight: number,
   nowMs: number,
+  layers: LayerToggles,
 ): void {
   ctx.save();
 
@@ -496,6 +523,7 @@ export function drawStreamingTraces(
 
   for (const trace of data.completedTraces) {
     if (trace.points.length < 2) continue;
+    if (!isStreamingRoadVisible(layers, trace.road_class, trace.trace_id)) continue;
 
     // Color based on road class
     if (trace.road_class === 'arterial') {
@@ -535,6 +563,7 @@ export function drawStreamingTraces(
   if (data.polylineEdges && data.polylineEdges.size > 0) {
     for (const [, edge] of data.polylineEdges) {
       if (!edge.pathPoints || edge.pathPoints.length < 2) continue;
+      if (!isStreamingRoadVisible(layers, edge.roadClass, edge.id)) continue;
       if (edge.roadClass === 'arterial') {
         ctx.strokeStyle = 'rgba(236, 246, 255, 0.88)';
         ctx.lineWidth = 2.8;
@@ -561,6 +590,7 @@ export function drawStreamingTraces(
   // Draw partial traces (growing, with animation)
   for (const [traceId, points] of data.partialTraces) {
     if (points.length < 2) continue;
+    if (!isStreamingRoadVisible(layers, undefined, traceId)) continue;
 
     const isCollector = traceId.startsWith('collector-trace-');
     ctx.strokeStyle = isCollector
@@ -601,7 +631,7 @@ export function drawStreamingTraces(
   }
 
   // Draw incremental nodes (if available)
-  if (data.nodes && data.nodes.size > 0) {
+  if (hasAnyStreamingRoadLayersEnabled(layers) && data.nodes && data.nodes.size > 0) {
     ctx.fillStyle = 'rgba(255, 200, 100, 0.8)';
     for (const [, node] of data.nodes) {
       const s = worldToScreen(node.x, node.y, extent, cssWidth, cssHeight, viewport);
@@ -612,10 +642,18 @@ export function drawStreamingTraces(
   }
 
   // Draw incremental edges (if nodes are available for lookup)
-  if ((!data.polylineEdges || data.polylineEdges.size === 0) && data.edges && data.edges.size > 0 && data.nodes && data.nodes.size > 0) {
+  if (
+    hasAnyStreamingRoadLayersEnabled(layers)
+    && (!data.polylineEdges || data.polylineEdges.size === 0)
+    && data.edges
+    && data.edges.size > 0
+    && data.nodes
+    && data.nodes.size > 0
+  ) {
     ctx.strokeStyle = 'rgba(200, 180, 255, 0.7)';
     ctx.lineWidth = 1.5;
     for (const [, edge] of data.edges) {
+      if (!isStreamingRoadVisible(layers, edge.road_class, edge.id)) continue;
       const uNode = data.nodes.get(edge.u);
       const vNode = data.nodes.get(edge.v);
       if (!uNode || !vNode) continue;
@@ -630,7 +668,7 @@ export function drawStreamingTraces(
   }
 
   // Draw river centerlines (if available)
-  if (data.rivers && data.rivers.length > 0) {
+  if (layers.rivers && data.rivers && data.rivers.length > 0) {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (const river of data.rivers) {

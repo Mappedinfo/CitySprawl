@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import heapq
 from collections import defaultdict
 from typing import Any, Callable, Dict, Optional, Sequence
@@ -30,7 +30,7 @@ class LocalClassicFillConfig:
     local_trace_target_max_m: float = 1000.0
     local_trace_soft_cap_m: float = 1200.0
     local_trace_force_continue_until_min: bool = True
-    local_trace_exception_small_block_long_axis_m: float = 650.0
+    local_trace_exception_small_block_long_axis_m: float = 320.0
     local_classic_probe_step_m: float = 18.0
     local_classic_seed_spacing_m: float = 110.0
     local_classic_max_trace_len_m: float = 420.0
@@ -46,6 +46,7 @@ class LocalClassicFillConfig:
     local_community_spine_prob: float = 0.28
     local_arterial_setback_weight: float = 0.5
     local_collector_follow_weight: float = 0.9
+    local_allow_disconnected_accept: bool = False
     slope_straight_threshold_deg: float = 5.0
     slope_serpentine_threshold_deg: float = 15.0
     slope_hard_limit_deg: float = 22.0
@@ -63,6 +64,8 @@ class _State:
     direction: Vec2
     block_idx: int
     depth: int = 0
+    lineage_id: str = field(default="", compare=False)
+    parent_lineage_id: Optional[str] = field(default=None, compare=False)
 
 
 @dataclass
@@ -71,6 +74,9 @@ class LocalTraceMeta:
     is_spine_candidate: bool = False
     connected_to_collector: bool = False
     culdesac: bool = False
+    depth: int = 0
+    trace_lineage_id: Optional[str] = None
+    parent_trace_lineage_id: Optional[str] = None
 
 
 def _point_in_poly_or_close(poly, p: Vec2, tol: float = 1.0) -> bool:
@@ -90,6 +96,46 @@ def _point_in_poly_or_close(poly, p: Vec2, tol: float = 1.0) -> bool:
         return bool(poly.contains(pt))
     except Exception:
         return False
+
+
+def _find_block_index_for_point(blocks: Sequence[object], p: Vec2, *, preferred_idx: int = -1, tol: float = 1.0) -> Optional[int]:
+    if 0 <= int(preferred_idx) < len(blocks):
+        if _point_in_poly_or_close(blocks[int(preferred_idx)], p, tol=tol):
+            return int(preferred_idx)
+    for i, block in enumerate(blocks):
+        if i == int(preferred_idx):
+            continue
+        if _point_in_poly_or_close(block, p, tol=tol):
+            return int(i)
+    return None
+
+
+def _classify_network_contact_mode(
+    *,
+    approach_dir: Vec2,
+    contact_point: Vec2,
+    candidate_segments: Sequence[Segment],
+) -> str:
+    if not candidate_segments:
+        return "unknown"
+    tan, _ = _nearest_segment_tangent(contact_point, candidate_segments)
+    if tan is None or tan.length() <= 1e-9:
+        return "unknown"
+    a = approach_dir.normalized()
+    t = tan.normalized()
+    if a.length() <= 1e-9 or t.length() <= 1e-9:
+        return "unknown"
+    dot = float(max(-1.0, min(1.0, a.dot(t))))
+    # Opposing: roughly head-on; stop and merge.
+    if dot <= -0.82:
+        return "opposing"
+    # Perpendicular-ish: allow T/cross while trunk continues.
+    if abs(dot) <= 0.34:
+        return "perpendicular"
+    # Near-parallel: treat as merge to avoid duplicate overlapping traces.
+    if abs(dot) >= 0.82:
+        return "parallel"
+    return "oblique"
 
 
 def _block_centroid_vecs(block, seed_count: int, rng: np.random.Generator) -> list[Vec2]:
@@ -327,7 +373,19 @@ def generate_classic_local_fill(
             d0 = inward_dir.normalized()
             if d0.length() <= 1e-9:
                 continue
-            heapq.heappush(queue, _State(priority=float(rng.uniform(0.0, 0.8)), pos=sp, direction=d0, block_idx=bi, depth=0))
+            lineage_id = f"b{int(bi)}.r{int(added)}"
+            heapq.heappush(
+                queue,
+                _State(
+                    priority=float(rng.uniform(0.0, 0.8)),
+                    pos=sp,
+                    direction=d0,
+                    block_idx=bi,
+                    depth=0,
+                    lineage_id=lineage_id,
+                    parent_lineage_id=None,
+                ),
+            )
             added += 1
         block_seed_counts.append(added)
 
@@ -344,6 +402,12 @@ def generate_classic_local_fill(
     accepted_trace_block_indices: list[int] = []
     accepted_trace_cul_flags: list[bool] = []
     trace_stream_attempt_seq = 0
+    contact_mode_counts: dict[str, int] = {
+        "opposing": 0,
+        "parallel": 0,
+        "perpendicular_continue": 0,
+        "oblique_continue": 0,
+    }
 
     step_m = max(8.0, float(cfg.local_classic_probe_step_m))
     junction_probe = max(8.0, step_m * 0.85)
@@ -379,8 +443,16 @@ def generate_classic_local_fill(
         trace_target_max_this = float(trace_target_max_m if trace_target_enabled else max(trace_target_min_this + 120.0, min(trace_len_cap, local_spacing_m * 4.6)))
         trace_soft_cap_this = float(min(trace_len_cap, trace_soft_cap_m if trace_target_enabled else trace_len_cap))
         block_long_axis_this = float(block_long_axes[st.block_idx]) if st.block_idx < len(block_long_axes) else 0.0
-        max_steps = max(4, int(trace_len_cap / step_m) + 2)
+        near_network_terminate_min_len = max(local_spacing_m * 2.4, 180.0)
+        # Treat only the first accepted root trace in a block as the persistent
+        # "mainline" trunk. This preserves branch-like continuous growth
+        # semantics without making every branch run to the map boundary.
+        persistent_mainline = bool(st.depth == 0 and per_block_counts.get(st.block_idx, 0) <= 0)
+        step_budget_len = float(max(trace_len_cap, extent_m * 2.4)) if persistent_mainline else float(trace_len_cap)
+        max_steps = max(4, int(step_budget_len / step_m) + 2)
         start_pos = pts[0]
+        active_block_idx = int(st.block_idx)
+        active_block = block
 
         d0, _ = _nearest_road_distance_and_projection(st.pos, base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
         if d0 < junction_probe:
@@ -411,26 +483,33 @@ def generate_classic_local_fill(
             if not (0.0 <= nxt.x <= extent_m and 0.0 <= nxt.y <= extent_m):
                 reason = "boundary"
                 break
-            if not _point_in_poly_or_close(block, nxt, tol=1.0):
-                reason = "block_exit"
-                break
+            if not _point_in_poly_or_close(active_block, nxt, tol=1.0):
+                next_block_idx = _find_block_index_for_point(blocks, nxt, preferred_idx=active_block_idx, tol=1.0)
+                if next_block_idx is None:
+                    reason = "block_exit"
+                    break
+                active_block_idx = int(next_block_idx)
+                active_block = blocks[active_block_idx]
             if probe.check_water_hit(nxt):
                 alt = probe.snap_or_bias_to_riverfront(cur, d)
                 alt = _clamp_turn(prev_dir, alt, float(cfg.local_classic_turn_limit_deg))
                 alt_nxt = Vec2(cur.x + alt.x * step_m, cur.y + alt.y * step_m)
-                if alt.length() <= 1e-9 or probe.check_water_hit(alt_nxt) or not _point_in_poly_or_close(block, alt_nxt, tol=1.0):
+                if alt.length() <= 1e-9 or probe.check_water_hit(alt_nxt):
                     reason = "river_blocked"
                     break
+                if not _point_in_poly_or_close(active_block, alt_nxt, tol=1.0):
+                    alt_block_idx = _find_block_index_for_point(blocks, alt_nxt, preferred_idx=active_block_idx, tol=1.0)
+                    if alt_block_idx is None:
+                        reason = "river_blocked"
+                        break
+                    active_block_idx = int(alt_block_idx)
+                    active_block = blocks[active_block_idx]
                 d, nxt = alt, alt_nxt
 
-            # Distance-from-higher-order-roads constraint: stop local road
-            # growth that wanders too far from arterials/collectors.
+            # Soft distance-from-higher-order-roads signal: no hard stop in
+            # coverage-first mode. We still use this distance downstream to
+            # damp branching/continuation probability.
             max_road_dist = float(cfg.local_classic_max_road_distance_m)
-            if max_road_dist > 0.0 and (arterial_segments or collector_segments):
-                d_higher, _ = _nearest_road_distance_and_projection(nxt, arterial_segments + collector_segments)
-                if d_higher > max_road_dist:
-                    reason = "road_too_far"
-                    break
 
             seg = Segment(cur, nxt)
             if len(pts) >= 4:
@@ -444,18 +523,47 @@ def generate_classic_local_fill(
                     break
 
             d_net, proj_net = _nearest_road_distance_and_projection(nxt, base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
-            # FIX: Removed trace_target_enabled logic that forced d_net=inf to prevent
-            # early termination. Now local roads snap to network as soon as they touch it,
-            # enabling proper grid closure and block formation.
+            # Angle-aware network contact:
+            # - head-on / near-parallel contacts merge and stop
+            # - perpendicular contacts allow T/cross while the mainline keeps extending
             if d_net < junction_probe and proj_net is not None and total_len >= max(12.0, step_m):
-                if _point_in_poly_or_close(block, proj_net, tol=1.0) and proj_net.distance_to(cur) > 1.5:
+                snapped_to_network = False
+                proj_block_idx = _find_block_index_for_point(blocks, proj_net, preferred_idx=active_block_idx, tol=1.0)
+                contact_mode = _classify_network_contact_mode(
+                    approach_dir=d,
+                    contact_point=proj_net,
+                    candidate_segments=base_segments + runtime_segments,
+                )
+                if proj_block_idx is not None and proj_net.distance_to(cur) > 1.5:
                     pts.append(proj_net)
                     total_len += cur.distance_to(proj_net)
                     connected += 1
-                reason = "near_network"
-                break
+                    snapped_to_network = True
+                    active_block_idx = int(proj_block_idx)
+                    active_block = blocks[active_block_idx]
+                    snap_dir = (proj_net - cur).normalized()
+                    if contact_mode in {"parallel", "opposing"} and snap_dir.length() > 1e-9:
+                        prev_dir = snap_dir
+                terminate_on_touch = False
+                if contact_mode in {"opposing", "parallel"}:
+                    contact_mode_counts[str(contact_mode)] = contact_mode_counts.get(str(contact_mode), 0) + 1
+                    terminate_on_touch = True
+                elif (not persistent_mainline) and total_len >= near_network_terminate_min_len:
+                    # Keep legacy-ish behavior for deeper branches to prevent overgrowth.
+                    terminate_on_touch = True
+                if terminate_on_touch:
+                    reason = "near_network"
+                    break
+                # Mainline-first behavior: perpendicular/oblique touches become
+                # internal waypoints so the road can continue through T/crosses.
+                if contact_mode == "perpendicular":
+                    contact_mode_counts["perpendicular_continue"] = contact_mode_counts.get("perpendicular_continue", 0) + 1
+                elif contact_mode == "oblique":
+                    contact_mode_counts["oblique_continue"] = contact_mode_counts.get("oblique_continue", 0) + 1
+                if snapped_to_network:
+                    continue
 
-            if total_len >= max(float(cfg.local_classic_min_trace_len_m), local_spacing_m * 1.15):
+            if (not persistent_mainline) and total_len >= max(float(cfg.local_classic_min_trace_len_m), local_spacing_m * 1.15):
                 end_span_candidate = start_pos.distance_to(nxt)
                 if end_span_candidate > endpoint_span_cap:
                     reason = "span_cap"
@@ -525,36 +633,43 @@ def generate_classic_local_fill(
                                 priority=float(st.depth + 1) + float(rng.uniform(0.0, 0.4)),
                                 pos=nxt,
                                 direction=bdir,
-                                block_idx=st.block_idx,
+                                block_idx=active_block_idx,
                                 depth=st.depth + 1,
+                                lineage_id=(f"{st.lineage_id}.b{branch_enq + 1}" if st.lineage_id else f"b{active_block_idx}.d{st.depth+1}.{branch_enq+1}"),
+                                parent_lineage_id=(st.lineage_id or None),
                             ),
                         )
                         branch_enq += 1
 
             if total_len >= float(cfg.local_classic_min_trace_len_m):
-                local_cont_prob = float(cfg.local_classic_continue_prob)
-                # Distance-based continue probability decay for natural edge
-                # thinning: roads far from higher-order network terminate sooner.
-                if max_road_dist > 0.0 and (arterial_segments or collector_segments):
-                    d_cont_check, _ = _nearest_road_distance_and_projection(cur, arterial_segments + collector_segments)
-                    if d_cont_check > 0.4 * max_road_dist:
-                        dist_ratio = min(1.0, d_cont_check / max_road_dist)
-                        local_cont_prob *= max(0.15, 1.0 - dist_ratio)
-                if trace_len_cap > max(float(cfg.local_classic_min_trace_len_m) + 1.0, 1.0):
-                    trace_ratio = min(1.4, total_len / max(trace_len_cap, 1e-6))
-                    if trace_ratio > 0.75:
-                        local_cont_prob *= max(0.35, 1.0 - (trace_ratio - 0.75) / 0.65)
-                # Lifespan protection: ensure local roads survive long enough
-                # to cross a typical block (~150m) before stochastic termination.
-                safe_length = max(local_spacing_m * 1.8, 200.0)
-                if total_len < safe_length:
-                    progress = total_len / safe_length
-                    local_cont_prob = max(local_cont_prob, 0.98 - 0.20 * progress)
-                if rng.random() > local_cont_prob:
-                    cul = rng.random() < float(cfg.local_classic_culdesac_prob)
-                    reason = "stochastic_stop"
-                    break
-            if total_len >= trace_soft_cap_this:
+                if persistent_mainline:
+                    if total_len >= max(trace_soft_cap_this, float(extent_m) * 2.2):
+                        reason = "max_len"
+                        break
+                else:
+                    local_cont_prob = float(cfg.local_classic_continue_prob)
+                    # Distance-based continue probability decay for natural edge
+                    # thinning: roads far from higher-order network terminate sooner.
+                    if max_road_dist > 0.0 and (arterial_segments or collector_segments):
+                        d_cont_check, _ = _nearest_road_distance_and_projection(cur, arterial_segments + collector_segments)
+                        if d_cont_check > 0.4 * max_road_dist:
+                            dist_ratio = min(1.0, d_cont_check / max_road_dist)
+                            local_cont_prob *= max(0.15, 1.0 - dist_ratio)
+                    if trace_len_cap > max(float(cfg.local_classic_min_trace_len_m) + 1.0, 1.0):
+                        trace_ratio = min(1.4, total_len / max(trace_len_cap, 1e-6))
+                        if trace_ratio > 0.75:
+                            local_cont_prob *= max(0.35, 1.0 - (trace_ratio - 0.75) / 0.65)
+                    # Lifespan protection: ensure local roads survive long enough
+                    # to cross a typical block (~150m) before stochastic termination.
+                    safe_length = max(local_spacing_m * 2.6, 260.0)
+                    if total_len < safe_length:
+                        progress = total_len / safe_length
+                        local_cont_prob = max(local_cont_prob, 0.98 - 0.20 * progress)
+                    if rng.random() > local_cont_prob:
+                        cul = rng.random() < float(cfg.local_classic_culdesac_prob)
+                        reason = "stochastic_stop"
+                        break
+            if (not persistent_mainline) and total_len >= trace_soft_cap_this:
                 reason = "max_len"
                 break
 
@@ -569,7 +684,7 @@ def generate_classic_local_fill(
             d_end, _ = _nearest_road_distance_and_projection(pts[-1], base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
             if d_end < max(junction_probe * 2.5, 24.0):
                 connected = 1
-        if connected < 1 and len(runtime_segments) > 0:
+        if connected < 1 and len(runtime_segments) > 0 and (not bool(getattr(cfg, "local_allow_disconnected_accept", False))):
             continue
 
         traces.append(pts)
@@ -596,10 +711,13 @@ def generate_classic_local_fill(
         )
         trace_meta.append(
             LocalTraceMeta(
-                block_idx=int(st.block_idx),
+                block_idx=int(active_block_idx),
                 is_spine_candidate=is_spine_candidate,
                 connected_to_collector=connected_to_collector,
                 culdesac=bool(cul),
+                depth=int(st.depth),
+                trace_lineage_id=(st.lineage_id or None),
+                parent_trace_lineage_id=(st.parent_lineage_id or None),
             )
         )
         if cul:
@@ -614,6 +732,13 @@ def generate_classic_local_fill(
 
     for reason, count in sorted(stop_reasons.items(), key=lambda kv: (-kv[1], kv[0]))[:6]:
         notes.append(f"local_classic_stop:{reason}:{count}")
+    contact_parts = [
+        f"{name}={int(contact_mode_counts.get(name, 0))}"
+        for name in ("opposing", "parallel", "perpendicular_continue", "oblique_continue")
+        if int(contact_mode_counts.get(name, 0)) > 0
+    ]
+    if contact_parts:
+        notes.append("local_classic_contacts:" + ",".join(contact_parts))
     notes.append(f"local_classic_trace_count:{len(traces)}")
     if trace_cap_n > 0:
         notes.append(f"local_classic_avg_trace_cap_m:{int(round(trace_cap_sum / trace_cap_n))}")
@@ -673,5 +798,20 @@ def generate_classic_local_fill(
         "local_classic_trace_nonexception_target_band_rate": (
             float(nonexception_band_count / len(nonexception_lengths)) if nonexception_lengths else 0.0
         ),
+        "local_classic_contact_opposing_count": float(contact_mode_counts.get("opposing", 0)),
+        "local_classic_contact_parallel_count": float(contact_mode_counts.get("parallel", 0)),
+        "local_classic_contact_perpendicular_continue_count": float(contact_mode_counts.get("perpendicular_continue", 0)),
+        "local_classic_contact_oblique_continue_count": float(contact_mode_counts.get("oblique_continue", 0)),
     }
+    # Promote stop-reason diagnostics to numeric metrics so callers can track
+    # coverage regressions without parsing notes strings.
+    for stop_key in (
+        "near_network",
+        "block_exit",
+        "stochastic_stop",
+        "road_too_far",
+        "river_blocked",
+        "span_cap",
+    ):
+        numeric[f"local_classic_stop_{stop_key}_count"] = float(stop_reasons.get(stop_key, 0))
     return traces, cul_flags, trace_meta, notes, numeric

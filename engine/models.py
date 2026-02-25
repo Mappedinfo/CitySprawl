@@ -250,6 +250,9 @@ class RoadEdgeRecord(StrictModel):
     width_m: float = 8.0
     render_order: int = 1
     path_points: Optional[List[Point2D]] = None
+    continuity_id: Optional[str] = None
+    parent_continuity_id: Optional[str] = None
+    segment_order: Optional[int] = None
 
 
 class RoadNetwork(StrictModel):
@@ -336,6 +339,25 @@ class Metrics(StrictModel):
     local_two_point_edge_ratio: float = 0.0
     local_reroute_avg_path_points: float = 0.0
     local_reroute_avg_length_gain_ratio: float = 0.0
+    local_buildable_area_m2: Optional[float] = None
+    local_coverage_radius_m: Optional[float] = None
+    local_coverage_ratio: Optional[float] = None
+    local_uncovered_area_m2: Optional[float] = None
+    local_coverage_supplement_added_count: Optional[int] = None
+    local_frontier_supplement_added_count: Optional[int] = None
+    local_grid_supplement_budget: Optional[int] = None
+    local_grid_supplement_added_count: Optional[int] = None
+    local_grid_supplement_used_ratio: Optional[float] = None
+    local_classic_stop_near_network_count: Optional[int] = None
+    local_classic_stop_block_exit_count: Optional[int] = None
+    local_classic_stop_stochastic_stop_count: Optional[int] = None
+    local_classic_stop_road_too_far_count: Optional[int] = None
+    local_classic_stop_river_blocked_count: Optional[int] = None
+    local_classic_stop_span_cap_count: Optional[int] = None
+    local_classic_contact_opposing_count: Optional[int] = None
+    local_classic_contact_parallel_count: Optional[int] = None
+    local_classic_contact_perpendicular_continue_count: Optional[int] = None
+    local_classic_contact_oblique_continue_count: Optional[int] = None
     generation_profile: str = "balanced"
     degraded_mode: bool = False
     notes: List[str] = Field(default_factory=list)

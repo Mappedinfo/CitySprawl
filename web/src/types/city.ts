@@ -149,6 +149,9 @@ export type RoadEdgeRecord = {
   width_m: number;
   render_order: number;
   path_points?: Point2D[] | null;
+  continuity_id?: string | null;
+  parent_continuity_id?: string | null;
+  segment_order?: number | null;
 };
 
 export type ResourceSite = {
