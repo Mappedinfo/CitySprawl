@@ -188,6 +188,59 @@ button:disabled {
   color: var(--ink);
 }
 
+.layer-groups {
+  display: grid;
+  gap: 8px;
+}
+
+.layer-group {
+  border: 1px solid rgba(108, 223, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(8, 12, 20, 0.44);
+  padding: 8px 10px;
+}
+
+.layer-group-title {
+  margin-bottom: 4px;
+  font-size: 0.7rem;
+  color: var(--ink-dim);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.layer-group-body {
+  display: grid;
+  gap: 1px;
+}
+
+.checkbox-row.compact.layer-item {
+  margin: 2px 0;
+  border-radius: 8px;
+  padding: 2px 4px;
+}
+
+.checkbox-row.compact.layer-item.is-child {
+  position: relative;
+  margin-left: 14px;
+  padding-left: 12px;
+}
+
+.checkbox-row.compact.layer-item.is-child::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: rgba(108, 223, 255, 0.18);
+}
+
+.layer-item-label {
+  text-transform: none;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
 .button-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

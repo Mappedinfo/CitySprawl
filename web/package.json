@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -14,11 +16,16 @@
     "three": "^0.174.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.3.24",
     "@types/react-dom": "^18.3.7",
     "@types/three": "^0.183.1",
     "@vitejs/plugin-react": "^4.4.1",
+    "jsdom": "^28.1.0",
     "typescript": "^5.7.3",
-    "vite": "^5.4.19"
+    "vite": "^5.4.19",
+    "vitest": "^4.0.18"
   }
 }

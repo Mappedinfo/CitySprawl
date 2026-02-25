@@ -32,7 +32,19 @@ type Props = {
   onLayerToggle: (key: keyof Props['layers']) => void;
 };
 
-const LAYER_LABELS: Record<string, string> = {
+type LayerKey = keyof Props['layers'];
+type LayerGroupId = 'field' | 'surface' | 'line' | 'point';
+type LayerItemDef = {
+  key: LayerKey;
+  indent?: 0 | 1;
+};
+type LayerGroupDef = {
+  id: LayerGroupId;
+  label: string;
+  items: LayerItemDef[];
+};
+
+const LAYER_LABELS: Record<LayerKey, string> = {
   terrain: 'Terrain',
   rivers: 'Rivers',
   roads: 'Roads',
@@ -51,6 +63,64 @@ const LAYER_LABELS: Record<string, string> = {
   greenZones: 'Green Zones',
 };
 
+const LAYER_GROUPS: LayerGroupDef[] = [
+  {
+    id: 'field',
+    label: 'Field / 场',
+    items: [{ key: 'terrain' }, { key: 'contours' }, { key: 'analysis' }],
+  },
+  {
+    id: 'surface',
+    label: 'Surface / 面',
+    items: [{ key: 'rivers' }, { key: 'blocks' }, { key: 'parcels' }, { key: 'buildings' }, { key: 'greenZones' }],
+  },
+  {
+    id: 'line',
+    label: 'Line / 线',
+    items: [
+      { key: 'roads' },
+      { key: 'majorRoads', indent: 1 },
+      { key: 'localRoads', indent: 1 },
+      { key: 'pedestrianPaths' },
+      { key: 'debugCandidates' },
+      { key: 'traffic' },
+    ],
+  },
+  {
+    id: 'point',
+    label: 'Point / 点',
+    items: [{ key: 'resources' }, { key: 'labels' }],
+  },
+];
+
+const GROUPED_LAYER_KEYS: LayerKey[] = LAYER_GROUPS.flatMap((group) => group.items.map((item) => item.key));
+let layerConfigMismatchWarned = false;
+
+function warnIfLayerGroupCoverageMismatch(layers: Props['layers']): void {
+  if (!import.meta.env.DEV || layerConfigMismatchWarned) return;
+
+  const actualKeys = Object.keys(layers) as LayerKey[];
+  const groupedSet = new Set<LayerKey>();
+  const duplicateKeys: LayerKey[] = [];
+  for (const key of GROUPED_LAYER_KEYS) {
+    if (groupedSet.has(key)) duplicateKeys.push(key);
+    groupedSet.add(key);
+  }
+
+  const missingKeys = actualKeys.filter((key) => !groupedSet.has(key));
+  const extraKeys = GROUPED_LAYER_KEYS.filter((key) => !(key in layers));
+  if (!missingKeys.length && !extraKeys.length && !duplicateKeys.length) return;
+
+  layerConfigMismatchWarned = true;
+  console.warn('[Controls] Layer UI groups are out of sync with layer state.', {
+    missingKeys,
+    extraKeys,
+    duplicateKeys,
+    actualKeys,
+    groupedKeys: GROUPED_LAYER_KEYS,
+  });
+}
+
 export function Controls({
   config,
   presets,
@@ -65,6 +135,8 @@ export function Controls({
   layers,
   onLayerToggle,
 }: Props) {
+  warnIfLayerGroupCoverageMismatch(layers);
+
   return (
     <aside className="panel controls-panel">
       <div className="panel-header">
@@ -262,12 +334,25 @@ export function Controls({
 
       <div className="section">
         <div className="section-title">Layers</div>
-        {Object.entries(layers).map(([key, value]) => (
-          <label key={key} className="checkbox-row compact">
-            <input type="checkbox" checked={value} onChange={() => onLayerToggle(key as keyof Props['layers'])} />
-            <span>{LAYER_LABELS[key] ?? key}</span>
-          </label>
-        ))}
+        <div className="layer-groups">
+          {LAYER_GROUPS.map((group) => (
+            <div key={group.id} className="layer-group" data-layer-group={group.id}>
+              <div className="layer-group-title">{group.label}</div>
+              <div className="layer-group-body">
+                {group.items.map(({ key, indent = 0 }) => (
+                  <label
+                    key={key}
+                    className={`checkbox-row compact layer-item${indent ? ' is-child' : ''}`}
+                    data-layer-key={key}
+                  >
+                    <input type="checkbox" checked={layers[key]} onChange={() => onLayerToggle(key)} />
+                    <span className="layer-item-label">{LAYER_LABELS[key]}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="button-row">
