@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from math import hypot
-from typing import DefaultDict, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import DefaultDict, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from engine.core.geometry import Segment, Vec2, point_segment_distance, project_point_to_segment, segment_intersection
 from engine.core.spatial import SpatialHashIndex
@@ -523,18 +523,50 @@ def apply_intersection_operators(
     t_junction_radius_m: float,
     split_tolerance_m: float,
     min_dangle_length_m: float,
+    target_classes: Optional[Set[str]] = None,
 ) -> tuple[list[object], list[object], list[str], dict[str, float]]:
+    """Apply intersection operators to road edges.
+    
+    Args:
+        nodes: List of road nodes.
+        edges: List of road edges.
+        snap_radius_m: Radius for snapping endpoints to nodes.
+        t_junction_radius_m: Radius for T-junction creation.
+        split_tolerance_m: Tolerance for splitting edges.
+        min_dangle_length_m: Minimum length for dangling edges.
+        target_classes: Optional set of road classes to process. If None, processes
+            all classes (backward compatible). Use {'arterial', 'collector'} for
+            Major-only processing, or {'local'} for Local-only processing.
+    
+    Returns:
+        Tuple of (nodes, edges, notes, numeric).
+    """
     notes: list[str] = []
     numeric: dict[str, float] = {}
 
-    snap_count = snap_endpoints_to_nodes(nodes, edges, snap_radius_m=snap_radius_m)
+    # If target_classes is specified, only process edges matching those classes
+    if target_classes is not None:
+        target_set = set(str(c).lower() for c in target_classes)
+        notes.append(f"intersection_target_classes:{','.join(sorted(target_set))}")
+        
+        # Separate edges into target and non-target groups
+        target_edges = [e for e in edges if str(getattr(e, "road_class", "")).lower() in target_set]
+        non_target_edges = [e for e in edges if str(getattr(e, "road_class", "")).lower() not in target_set]
+        
+        # Process only target edges
+        working_edges = list(target_edges)
+    else:
+        working_edges = list(edges)
+        non_target_edges = []
+
+    snap_count = snap_endpoints_to_nodes(nodes, working_edges, snap_radius_m=snap_radius_m)
     if snap_count:
         notes.append(f"intersection_snap_to_node:{snap_count}")
     numeric["intersection_snap_to_node_count"] = float(snap_count)
 
-    edges, t_snap_count, t_split_targets = snap_endpoints_to_segments_create_t_junctions(
+    working_edges, t_snap_count, t_split_targets = snap_endpoints_to_segments_create_t_junctions(
         nodes,
-        edges,
+        working_edges,
         t_radius_m=t_junction_radius_m,
         split_tol_m=split_tolerance_m,
     )
@@ -543,14 +575,20 @@ def apply_intersection_operators(
     numeric["intersection_t_junction_count"] = float(t_snap_count)
     numeric["intersection_t_split_target_count"] = float(t_split_targets)
 
-    edges, crossing_splits = split_crossings(nodes, edges, split_tol_m=split_tolerance_m)
+    working_edges, crossing_splits = split_crossings(nodes, working_edges, split_tol_m=split_tolerance_m)
     if crossing_splits:
         notes.append(f"intersection_crossing_splits:{crossing_splits}")
     numeric["intersection_crossing_split_count"] = float(crossing_splits)
 
-    edges, pruned_dangles = prune_short_dangles(nodes, edges, min_dangle_length_m=min_dangle_length_m)
+    working_edges, pruned_dangles = prune_short_dangles(nodes, working_edges, min_dangle_length_m=min_dangle_length_m)
     if pruned_dangles:
         notes.append(f"intersection_pruned_dangles:{pruned_dangles}")
     numeric["intersection_pruned_dangle_count"] = float(pruned_dangles)
 
-    return nodes, edges, notes, numeric
+    # Recombine processed target edges with non-target edges
+    if target_classes is not None:
+        final_edges = list(non_target_edges) + list(working_edges)
+    else:
+        final_edges = working_edges
+
+    return nodes, final_edges, notes, numeric

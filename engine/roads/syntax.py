@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -147,7 +147,24 @@ def apply_syntax_postprocess(
     choice_radius_hops: int,
     prune_low_choice_collectors: bool,
     prune_quantile: float,
+    target_classes: Optional[Set[str]] = None,
 ) -> tuple[list[object], list[str], dict[str, float]]:
+    """Apply space syntax postprocessing to road edges.
+    
+    Args:
+        nodes: Sequence of road nodes.
+        edges: List of road edges.
+        syntax_enable: Whether to enable syntax processing.
+        choice_radius_hops: Radius in hops for choice calculation.
+        prune_low_choice_collectors: Whether to prune low-choice collectors.
+        prune_quantile: Quantile threshold for pruning.
+        target_classes: Optional set of road classes to process. If None, processes
+            default classes (arterial, collector). Use {'arterial', 'collector'} for
+            Major-only processing in two-phase generation.
+    
+    Returns:
+        Tuple of (edges, notes, numeric).
+    """
     notes: list[str] = []
     numeric: dict[str, float] = {
         "syntax_enabled": 0.0,
@@ -157,6 +174,13 @@ def apply_syntax_postprocess(
     if not syntax_enable:
         notes.append("syntax:disabled")
         return edges, notes, numeric
+
+    # Determine which classes to process
+    if target_classes is not None:
+        target_set = set(str(c).lower() for c in target_classes)
+        notes.append(f"syntax_target_classes:{','.join(sorted(target_set))}")
+    else:
+        target_set = {"arterial", "collector"}  # default behavior
 
     scores, score_notes = compute_space_syntax_edge_scores(nodes, edges, choice_radius_hops=choice_radius_hops)
     notes.extend(score_notes)
@@ -170,7 +194,11 @@ def apply_syntax_postprocess(
     if scores:
         high = np.quantile(np.asarray(list(scores.values()), dtype=np.float64), 0.85)
         for i, e in enumerate(edges):
-            if str(getattr(e, "road_class", "")) != "collector":
+            rc = str(getattr(e, "road_class", "")).lower()
+            if rc != "collector":
+                continue
+            # Only process if collector is in target classes
+            if target_classes is not None and rc not in target_set:
                 continue
             score = float(scores.get(str(getattr(e, "id")), 0.0))
             if score <= float(high):
@@ -179,6 +207,11 @@ def apply_syntax_postprocess(
             edges[i] = _rebuild_edge_like(e, width_m=float(width))
 
     if not prune_low_choice_collectors:
+        return edges, notes, numeric
+
+    # Only prune collectors if they are in target classes
+    if target_classes is not None and "collector" not in target_set:
+        notes.append("syntax:collector_not_in_target_classes")
         return edges, notes, numeric
 
     collector_scores = [float(scores.get(str(getattr(e, "id")), 0.0)) for e in edges if str(getattr(e, "road_class", "")) == "collector"]
