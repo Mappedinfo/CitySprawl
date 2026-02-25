@@ -371,6 +371,14 @@ export default function App() {
       }),
     [isGenerationLayerPhase, generationProgress?.phase, generationProgress?.status, generationProgress?.progress],
   );
+  const stageInspectorGenerationContext = useMemo(
+    () => ({
+      enabled: isGenerationLayerPhase,
+      progress: isGenerationLayerPhase ? displayGenerationProgress : null,
+      backendSteps: backendStepStates,
+    }),
+    [isGenerationLayerPhase, displayGenerationProgress, backendStepStates],
+  );
 
   const selectedHub = useMemo<HubRecord | null>(() => {
     if (!artifact || !selectedHubId) return null;
@@ -1123,7 +1131,7 @@ export default function App() {
       </main>
 
       <div className="side-stack">
-        <StageInspector stage={currentStage} source={source} />
+        <StageInspector stage={currentStage} source={source} generationContext={stageInspectorGenerationContext} />
         <MetricsPanel artifact={artifact} selectedHub={selectedHub} />
       </div>
     </div>
