@@ -486,9 +486,12 @@ def generate_classic_local_fill(
                     trace_ratio = min(1.4, total_len / max(trace_len_cap, 1e-6))
                     if trace_ratio > 0.75:
                         local_cont_prob *= max(0.35, 1.0 - (trace_ratio - 0.75) / 0.65)
-                # FIX: Removed trace_target_enabled forced continuation logic that
-                # prevented roads from stopping naturally. Now roads can terminate
-                # when they should, enabling proper grid closure.
+                # Lifespan protection: ensure local roads survive long enough
+                # to cross a typical block (~150m) before stochastic termination.
+                safe_length = max(local_spacing_m * 1.5, 150.0)
+                if total_len < safe_length:
+                    progress = total_len / safe_length
+                    local_cont_prob = max(local_cont_prob, 0.98 - 0.28 * progress)
                 if rng.random() > local_cont_prob:
                     cul = rng.random() < float(cfg.local_classic_culdesac_prob)
                     reason = "stochastic_stop"

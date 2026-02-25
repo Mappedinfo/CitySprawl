@@ -492,6 +492,13 @@ def prune_short_dangles(
             pts = [Vec2(float(p.x if hasattr(p, "x") else p["x"]), float(p.y if hasattr(p, "y") else p["y"])) for p in path]
             length = _polyline_length(pts)
         if length < min_dangle_length_m:
+            # Lenient pruning for local roads: real-world residential
+            # cul-de-sacs can be as short as 25m, don't prune them
+            # using the same aggressive threshold as collectors.
+            rc = str(getattr(e, "road_class", ""))
+            if rc == "local" and length >= 25.0:
+                kept.append(e)
+                continue
             pruned += 1
             continue
         kept.append(e)
