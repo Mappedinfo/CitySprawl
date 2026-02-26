@@ -216,6 +216,15 @@ def test_generate_v2_async_progress_and_result():
     assert final_status["result_ready"] is True
     assert final_status["last_log_seq"] >= 1
 
+    run_logs_res = client.get(f"/api/v2/runs/{job_id}/logs")
+    assert run_logs_res.status_code == 200
+    run_logs = run_logs_res.json()
+    assert run_logs["run_id"] == job_id
+    assert run_logs["job_id"] == job_id
+    assert run_logs["last_seq"] >= 1
+    assert isinstance(run_logs["logs"], list)
+    assert any(log.get("kind") in ("lifecycle", "progress", "phase_timing") for log in run_logs["logs"])
+
     result_res = client.get(f"/api/v2/jobs/{job_id}/result")
     assert result_res.status_code == 200
     result_body = result_res.json()
@@ -240,18 +249,65 @@ def test_generate_stream_complete_event_keeps_final_artifact_object():
 
     lines = [line.strip() for line in text.splitlines()]
     complete_data = None
+    heartbeat_data = None
+    progress_phases = []
+    saw_heartbeat = False
     saw_complete = False
+    saw_batch = False
     for line in lines:
+        if line == "event: heartbeat":
+            saw_heartbeat = True
+            saw_complete = False
+            saw_batch = False
+            continue
+        if line == "event: batch":
+            saw_batch = True
+            saw_complete = False
+            saw_heartbeat = False
+            continue
         if line == "event: complete":
             saw_complete = True
+            saw_heartbeat = False
+            saw_batch = False
+            continue
+        if saw_heartbeat and line.startswith("data:") and heartbeat_data is None:
+            heartbeat_data = json.loads(line[len("data:"):].strip())
+            continue
+        if saw_batch and line.startswith("data:"):
+            batch_data = json.loads(line[len("data:"):].strip())
+            for evt in batch_data.get("events", []):
+                if str(evt.get("event_type", "")) != "progress":
+                    continue
+                data = evt.get("data", {}) if isinstance(evt, dict) else {}
+                phase = str(data.get("phase", "")) if isinstance(data, dict) else ""
+                if phase:
+                    progress_phases.append(phase)
             continue
         if saw_complete and line.startswith("data:"):
             complete_data = json.loads(line[len("data:"):].strip())
             break
+    assert heartbeat_data is not None
+    assert isinstance(heartbeat_data.get("run_id"), str) and heartbeat_data["run_id"]
     assert complete_data is not None
     assert isinstance(complete_data.get("final_artifact"), dict)
     assert "stages" in complete_data
     assert complete_data.get("stream_complete") is True
+    assert complete_data.get("run_id") == heartbeat_data.get("run_id")
+    road_progress_phases = [p for p in progress_phases if p.startswith("roads")]
+    assert road_progress_phases
+    assert any(p != "roads" for p in road_progress_phases)
+    assert any(
+        p.startswith("roads_collector.") or p.startswith("roads_local.")
+        for p in road_progress_phases
+    ), road_progress_phases
+
+    run_logs_res = client.get(f"/api/v2/runs/{complete_data['run_id']}/logs", params={"limit": 2000})
+    assert run_logs_res.status_code == 200
+    run_logs = run_logs_res.json()
+    assert run_logs["run_id"] == complete_data["run_id"]
+    assert run_logs["last_seq"] >= 1
+    assert any(log.get("event") == "sse_stream_started" for log in run_logs["logs"])
+    assert any(log.get("kind") in ("lifecycle", "progress", "phase_timing") for log in run_logs["logs"])
 
 
 def test_load_staged_json_roundtrip(tmp_path: Path):

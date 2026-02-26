@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Optional, Sequence
 
 import numpy as np
 
-from engine.core.geometry import Segment, Vec2, segment_intersection
+from engine.core.geometry import Segment, Vec2, project_point_to_segment, segment_intersection
 from engine.roads.classic_growth import (
     _clamp_turn,
     _emit_stream_event,
@@ -72,6 +72,7 @@ class _State:
     depth: int = 0
     lineage_id: str = field(default="", compare=False)
     parent_lineage_id: Optional[str] = field(default=None, compare=False)
+    from_major_portal: bool = field(default=False, compare=False)
 
 
 @dataclass
@@ -142,6 +143,64 @@ def _classify_network_contact_mode(
     if abs(dot) >= 0.82:
         return "parallel"
     return "oblique"
+
+
+def _major_repulsion_vector(
+    p: Vec2,
+    major_segments: Sequence[Segment],
+    *,
+    influence_radius_m: float,
+    max_samples: int = 12,
+) -> Optional[Vec2]:
+    if not major_segments or influence_radius_m <= 1e-6:
+        return None
+    samples: list[tuple[float, Vec2]] = []
+    for seg in major_segments:
+        proj = project_point_to_segment(p, seg)
+        d = p.distance_to(proj)
+        if d > influence_radius_m:
+            continue
+        away = (p - proj).normalized()
+        if away.length() <= 1e-9:
+            continue
+        samples.append((float(d), away))
+    if not samples:
+        return None
+    samples.sort(key=lambda item: item[0])
+    acc = Vec2(0.0, 0.0)
+    for d, away in samples[: max(1, int(max_samples))]:
+        w = (1.0 - min(1.0, d / max(influence_radius_m, 1e-6))) ** 2
+        acc = Vec2(acc.x + away.x * w, acc.y + away.y * w)
+    out = acc.normalized()
+    return out if out.length() > 1e-9 else None
+
+
+def _major_clearance_score(
+    p: Vec2,
+    major_segments: Sequence[Segment],
+    *,
+    influence_radius_m: float,
+    k: int = 6,
+) -> float:
+    if not major_segments or influence_radius_m <= 1e-6:
+        return float(influence_radius_m if influence_radius_m > 0.0 else 0.0)
+    dists: list[float] = []
+    for seg in major_segments:
+        proj = project_point_to_segment(p, seg)
+        d = p.distance_to(proj)
+        dists.append(float(min(max(d, 0.0), influence_radius_m)))
+    if not dists:
+        return float(influence_radius_m)
+    dists.sort()
+    use = dists[: max(1, int(k))]
+    # Weighted toward the closest few segments to reflect "major-road corridor" pressure.
+    weighted = 0.0
+    total_w = 0.0
+    for i, d in enumerate(use):
+        w = 1.0 / float(i + 1)
+        weighted += d * w
+        total_w += w
+    return float(weighted / total_w) if total_w > 0.0 else float(use[0])
 
 
 def _block_centroid_vecs(block, seed_count: int, rng: np.random.Generator) -> list[Vec2]:
@@ -466,10 +525,10 @@ def generate_classic_local_fill(
         if area < 2500.0:
             block_seed_counts.append(0)
             continue
-        seeds: list[tuple[Vec2, Vec2]] = []
+        seeds: list[tuple[Vec2, Vec2, bool]] = []
         if bi < len(major_seed_portal_by_block):
             for sp, inward, _clearance in sorted(major_seed_portal_by_block[bi], key=lambda item: -float(item[2])):
-                seeds.append((sp, inward))
+                seeds.append((sp, inward, True))
         if not seeds:
             # Fallback for blocks with no major-road contact (e.g. residual supplement polygons):
             # use centroid-like seeds, not boundary seeds, to preserve "grow from network inward"
@@ -481,11 +540,11 @@ def generate_classic_local_fill(
             for sp in fallback:
                 if not _point_in_poly_or_close(block, sp, tol=2.0):
                     continue
-                seeds.append((sp, major))
+                seeds.append((sp, major, False))
                 fallback_centroid_seed_count += 1
 
         added = 0
-        for sp, inward_dir in seeds:
+        for sp, inward_dir, from_major_portal in seeds:
             if not _point_in_poly_or_close(block, sp, tol=2.0):
                 continue
             if probe.check_water_hit(sp):
@@ -505,6 +564,7 @@ def generate_classic_local_fill(
                     depth=0,
                     lineage_id=lineage_id,
                     parent_lineage_id=None,
+                    from_major_portal=bool(from_major_portal),
                 ),
             )
             added += 1
@@ -529,9 +589,25 @@ def generate_classic_local_fill(
         "perpendicular_continue": 0,
         "oblique_continue": 0,
     }
+    major_repel_eval_count = 0
+    major_repel_apply_count = 0
+    major_repel_post_contact_boost_count = 0
+    major_repel_no_valid_candidate_count = 0
+    major_repel_clearance_gain_sum_m = 0.0
 
     step_m = max(8.0, float(cfg.local_classic_probe_step_m))
     junction_probe = max(8.0, step_m * 0.85)
+    major_segments = higher_order_segments
+    major_repel_influence_radius_m = max(local_spacing_m * 1.15, 140.0)
+    major_repel_max_samples = 12
+    major_clearance_k = 6
+    detach_influence_radius_m = max(local_spacing_m * 1.2, 150.0)
+    detach_target_clearance_m = max(local_spacing_m * 0.9, 95.0)
+    detach_max_len_m = max(local_spacing_m * 2.8, 280.0)
+    post_contact_detach_boost_steps = 6
+    detach_collector_follow_cap = 0.32
+    lambda_clearance = 1.15
+    clearance_gain_min_m = 4.0
 
     while queue:
         st = heapq.heappop(queue)
@@ -574,6 +650,7 @@ def generate_classic_local_fill(
         start_pos = pts[0]
         active_block_idx = int(st.block_idx)
         active_block = block
+        detach_boost_until_step = -1
 
         d0, _ = _nearest_road_distance_and_projection(st.pos, base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
         if d0 < junction_probe:
@@ -582,6 +659,20 @@ def generate_classic_local_fill(
         for step_idx in range(max_steps):
             cur = pts[-1]
             slope_deg = probe.sample_slope_deg(cur)
+            d_major_cur, _ = _nearest_road_distance_and_projection(cur, major_segments) if major_segments else (float("inf"), None)
+            cur_major_clearance = _major_clearance_score(
+                cur,
+                major_segments,
+                influence_radius_m=major_repel_influence_radius_m,
+                k=major_clearance_k,
+            ) if major_segments else float(detach_target_clearance_m)
+            in_post_contact_detach_boost = bool(step_idx < detach_boost_until_step)
+            detach_active = bool(
+                st.depth <= 1
+                and total_len < detach_max_len_m
+                and (bool(st.from_major_portal) or in_post_contact_detach_boost or d_major_cur < detach_influence_radius_m)
+                and cur_major_clearance < detach_target_clearance_m
+            )
             if slope_deg > float(cfg.slope_serpentine_threshold_deg):
                 d = probe.choose_serpentine_direction(cur, prev_dir, step_m, rng=rng)
             else:
@@ -590,11 +681,93 @@ def generate_classic_local_fill(
             tan_col, d_col = _nearest_segment_tangent(cur, collector_segments)
             if tan_col is not None and d_col < 120.0:
                 # local streets often branch roughly perpendicular to collector spines
-                pref = tan_col if rng.random() < float(cfg.local_community_spine_prob) else _turn_vec(tan_col, 90.0 if rng.random() < 0.5 else -90.0)
+                spine_prob = float(cfg.local_community_spine_prob)
+                if detach_active:
+                    spine_prob *= 0.35
+                pref = tan_col if rng.random() < spine_prob else _turn_vec(tan_col, 90.0 if rng.random() < 0.5 else -90.0)
                 w = min(0.9, float(cfg.local_collector_follow_weight) * (1.0 - d_col / 120.0))
+                if detach_active:
+                    w = min(w, detach_collector_follow_cap)
                 if d.dot(pref) < 0:
                     pref = Vec2(-pref.x, -pref.y)
                 d = Vec2(d.x * (1.0 - w) + pref.x * w, d.y * (1.0 - w) + pref.y * w).normalized()
+
+            d_base = d.normalized()
+            if (
+                detach_active
+                and major_segments
+                and d_base.length() > 1e-9
+                and d_major_cur < detach_influence_radius_m
+            ):
+                major_repel_eval_count += 1
+                major_rep_vec = _major_repulsion_vector(
+                    cur,
+                    major_segments,
+                    influence_radius_m=major_repel_influence_radius_m,
+                    max_samples=major_repel_max_samples,
+                )
+                if major_rep_vec is not None and major_rep_vec.length() > 1e-9:
+                    closeness = max(0.0, min(1.0, 1.0 - (d_major_cur / max(detach_influence_radius_m, 1e-6))))
+                    repel_weight = 0.35 + 0.45 * closeness
+                    if in_post_contact_detach_boost:
+                        repel_weight = min(0.90, repel_weight + 0.15)
+                    d_repel = Vec2(
+                        d_base.x * (1.0 - repel_weight) + major_rep_vec.x * repel_weight,
+                        d_base.y * (1.0 - repel_weight) + major_rep_vec.y * repel_weight,
+                    ).normalized()
+                    candidate_dirs = [
+                        d_repel,
+                        _turn_vec(d_repel, 20.0),
+                        _turn_vec(d_repel, -20.0),
+                        _turn_vec(d_repel, 40.0),
+                        _turn_vec(d_repel, -40.0),
+                        d_base,
+                        _turn_vec(d_base, 20.0),
+                        _turn_vec(d_base, -20.0),
+                    ]
+                    tan_col_unit = tan_col.normalized() if (tan_col is not None and tan_col.length() > 1e-9) else None
+                    best_dir: Optional[Vec2] = None
+                    best_score = -1e18
+                    best_gain = 0.0
+                    for cand0 in candidate_dirs:
+                        cand = _clamp_turn(prev_dir, cand0, float(cfg.local_classic_turn_limit_deg))
+                        if cand.length() <= 1e-9:
+                            continue
+                        cand_nxt = Vec2(cur.x + cand.x * step_m, cur.y + cand.y * step_m)
+                        if not (0.0 <= cand_nxt.x <= extent_m and 0.0 <= cand_nxt.y <= extent_m):
+                            continue
+                        if probe.check_water_hit(cand_nxt):
+                            continue
+                        if not _point_in_poly_or_close(active_block, cand_nxt, tol=1.0):
+                            if _find_block_index_for_point(blocks, cand_nxt, preferred_idx=active_block_idx, tol=1.0) is None:
+                                continue
+                        cand_clear = _major_clearance_score(
+                            cand_nxt,
+                            major_segments,
+                            influence_radius_m=major_repel_influence_radius_m,
+                            k=major_clearance_k,
+                        )
+                        clearance_gain = float(cand_clear - cur_major_clearance)
+                        terrain_align = float(cand.dot(d_base))
+                        collector_pref_term = 0.0
+                        if tan_col_unit is not None and d_col < 120.0:
+                            tangentiality = abs(float(cand.dot(tan_col_unit)))
+                            collector_pref_term -= 0.35 * max(0.0, tangentiality - 0.35)
+                            if abs(float(major_rep_vec.dot(tan_col_unit))) > 0.75:
+                                collector_pref_term -= 0.15 * tangentiality
+                        score = terrain_align + collector_pref_term + (lambda_clearance * max(0.0, clearance_gain))
+                        if score > best_score:
+                            best_score = score
+                            best_dir = cand
+                            best_gain = clearance_gain
+                    if best_dir is None:
+                        major_repel_no_valid_candidate_count += 1
+                    elif best_gain >= clearance_gain_min_m:
+                        d = best_dir
+                        major_repel_apply_count += 1
+                        major_repel_clearance_gain_sum_m += float(max(0.0, best_gain))
+                        if in_post_contact_detach_boost:
+                            major_repel_post_contact_boost_count += 1
 
             d = _clamp_turn(prev_dir, d, float(cfg.local_classic_turn_limit_deg))
             if d.length() <= 1e-9:
@@ -681,6 +854,8 @@ def generate_classic_local_fill(
                     contact_mode_counts["perpendicular_continue"] = contact_mode_counts.get("perpendicular_continue", 0) + 1
                 elif contact_mode == "oblique":
                     contact_mode_counts["oblique_continue"] = contact_mode_counts.get("oblique_continue", 0) + 1
+                if contact_mode in {"perpendicular", "oblique"} and st.depth <= 1:
+                    detach_boost_until_step = max(detach_boost_until_step, int(step_idx + 1 + post_contact_detach_boost_steps))
                 if snapped_to_network:
                     continue
 
@@ -758,6 +933,7 @@ def generate_classic_local_fill(
                                 depth=st.depth + 1,
                                 lineage_id=(f"{st.lineage_id}.b{branch_enq + 1}" if st.lineage_id else f"b{active_block_idx}.d{st.depth+1}.{branch_enq+1}"),
                                 parent_lineage_id=(st.lineage_id or None),
+                                from_major_portal=bool(st.from_major_portal),
                             ),
                         )
                         branch_enq += 1
@@ -936,6 +1112,14 @@ def generate_classic_local_fill(
         ),
         "local_classic_major_seed_spacing_interval_obs_max_m": (
             float(max(portal_interval_samples_m)) if portal_interval_samples_m else 0.0
+        ),
+        "local_classic_major_repel_eval_count": float(major_repel_eval_count),
+        "local_classic_major_repel_apply_count": float(major_repel_apply_count),
+        "local_classic_major_repel_post_contact_boost_count": float(major_repel_post_contact_boost_count),
+        "local_classic_major_repel_no_valid_candidate_count": float(major_repel_no_valid_candidate_count),
+        "local_classic_major_repel_clearance_gain_sum_m": float(major_repel_clearance_gain_sum_m),
+        "local_classic_major_repel_clearance_gain_avg_m": (
+            float(major_repel_clearance_gain_sum_m / major_repel_apply_count) if major_repel_apply_count > 0 else 0.0
         ),
     }
     # Promote stop-reason diagnostics to numeric metrics so callers can track

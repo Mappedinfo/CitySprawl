@@ -284,7 +284,7 @@ def test_classic_local_fill_mainlines_continue_through_perpendicular_network_con
     river_mask = np.zeros((96, 96), dtype=bool)
     river_union = Polygon()
 
-    traces, _cul_flags, _trace_meta, _notes, numeric = generate_classic_local_fill(
+    traces, _cul_flags, trace_meta, _notes, numeric = generate_classic_local_fill(
         extent_m=700.0,
         height=height,
         slope=slope,
@@ -381,7 +381,7 @@ def test_classic_local_fill_roots_local_traces_near_major_roads():
     river_mask = np.zeros((96, 96), dtype=bool)
     river_union = Polygon()
 
-    traces, _cul_flags, _trace_meta, _notes, numeric = generate_classic_local_fill(
+    traces, _cul_flags, trace_meta, _notes, numeric = generate_classic_local_fill(
         extent_m=1600.0,
         height=height,
         slope=slope,
@@ -407,6 +407,8 @@ def test_classic_local_fill_roots_local_traces_near_major_roads():
     major_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "collector"})
     assert len(traces) > 0
     assert numeric.get("local_classic_major_portal_seed_count", 0.0) > 0.0
+    assert "local_classic_major_repel_eval_count" in numeric
+    assert "local_classic_major_repel_apply_count" in numeric
 
     start_dists = []
     for tr in traces:
@@ -416,6 +418,26 @@ def test_classic_local_fill_roots_local_traces_near_major_roads():
     # network instead of spawning from arbitrary block boundary edges.
     assert start_dists
     assert np.quantile(np.asarray(start_dists, dtype=np.float64), 0.5) <= 18.0
+
+    shallow_clearance_gains = []
+    for tr, meta in zip(traces, trace_meta):
+        depth = int(getattr(meta, "depth", 99))
+        if depth > 1 or len(tr) < 2:
+            continue
+        d_start, _ = _nearest_road_distance_and_projection(tr[0], major_segments)
+        traveled = 0.0
+        early_pts = [tr[0]]
+        for i in range(1, len(tr)):
+            traveled += tr[i - 1].distance_to(tr[i])
+            early_pts.append(tr[i])
+            if traveled >= 120.0 or len(early_pts) >= 10:
+                break
+        peak_early = max(_nearest_road_distance_and_projection(p, major_segments)[0] for p in early_pts)
+        shallow_clearance_gains.append(float(peak_early - d_start))
+    assert shallow_clearance_gains
+    # Root/shallow traces should detach from the major corridor instead of staying
+    # glued to arterial/collector centerlines for their early segments.
+    assert max(shallow_clearance_gains) >= 40.0
 
 
 def test_classify_network_contact_mode_emits_opposing_parallel_and_perpendicular():

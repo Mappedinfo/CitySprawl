@@ -18,8 +18,18 @@ from sse_starlette.sse import EventSourceResponse
 
 from engine.generator import generate_city, generate_city_staged
 from engine.models import CityArtifact, GenerateConfig, StagedCityResponse
+from engine.observability.logging import (
+    config_hash,
+    configure_citygen_logging,
+    get_observability_settings,
+    get_run_log_store,
+    log_structured,
+    run_context,
+    summarize_stream_event_meta,
+)
 from engine.pydantic_compat import model_json_schema, model_dump
 
+configure_citygen_logging()
 _LOGGER = logging.getLogger("citygen.api.jobs")
 _JOBS_LOCK = threading.Lock()
 _JOBS: Dict[str, Dict[str, Any]] = {}
@@ -30,6 +40,16 @@ StreamCallback = Callable[[Dict[str, Any]], None]
 
 class LoadStagedJsonRequest(BaseModel):
     path: str = Field(min_length=1)
+
+
+class RunLogsResponse(BaseModel):
+    run_id: str
+    job_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+    last_seq: int
+    dropped_count: int
+    logs: List[Dict[str, Any]]
 
 
 class StreamBuffer:
@@ -101,6 +121,25 @@ def _append_job_log(job: Dict[str, Any], *, phase: str, progress: float, message
     job["progress"] = entry["progress"]
     job["message"] = entry["message"]
     _LOGGER.info("[job:%s] %s %.0f%% %s", job.get("id"), entry["phase"], entry["progress"] * 100.0, entry["message"])
+    try:
+        settings = get_observability_settings()
+        log_structured(
+            _LOGGER,
+            logging.DEBUG if settings.progress_debug else logging.INFO,
+            event="job_progress",
+            message=f"job progress {entry['phase']} {entry['progress'] * 100.0:.0f}%",
+            kind="progress",
+            component="api.jobs",
+            run_id=str(job.get("id") or ""),
+            job_id=str(job.get("id") or ""),
+            phase=str(entry["phase"]),
+            data={
+                "progress": float(entry["progress"]),
+                "message": str(entry["message"]),
+            },
+        )
+    except Exception:
+        pass
 
 
 def _job_status_payload(job: Dict[str, Any], *, since_seq: int = 0) -> Dict[str, Any]:
@@ -128,30 +167,64 @@ def _run_generate_job(job_id: str, payload: GenerateConfig) -> None:
                 return
             _append_job_log(job, phase=phase, progress=progress, message=message)
 
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if not job:
-            return
-        job["status"] = "running"
-        _append_job_log(job, phase="queued", progress=0.0, message="Job accepted by backend")
-    try:
-        result = generate_city_staged(payload, progress_cb=_progress_cb)
-    except Exception as exc:
+    with run_context(job_id, job_id=job_id):
+        log_structured(
+            _LOGGER,
+            logging.INFO,
+            event="async_job_thread_started",
+            message="Async generation job thread started",
+            kind="lifecycle",
+            component="api.jobs",
+            run_id=job_id,
+            job_id=job_id,
+            data={"config_hash": config_hash(payload)},
+        )
         with _JOBS_LOCK:
             job = _JOBS.get(job_id)
             if not job:
                 return
-            job["status"] = "failed"
-            job["error"] = f"{exc.__class__.__name__}: {exc}"
-            _append_job_log(job, phase="failed", progress=float(job.get("progress", 0.0)), message=job["error"])
-        return
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if not job:
+            job["status"] = "running"
+            _append_job_log(job, phase="queued", progress=0.0, message="Job accepted by backend")
+        try:
+            result = generate_city_staged(payload, progress_cb=_progress_cb)
+        except Exception as exc:
+            log_structured(
+                _LOGGER,
+                logging.ERROR,
+                event="async_job_failed",
+                message="Async generation job failed",
+                kind="error",
+                component="api.jobs",
+                run_id=job_id,
+                job_id=job_id,
+                exc=exc,
+            )
+            with _JOBS_LOCK:
+                job = _JOBS.get(job_id)
+                if not job:
+                    return
+                job["status"] = "failed"
+                job["error"] = f"{exc.__class__.__name__}: {exc}"
+                _append_job_log(job, phase="failed", progress=float(job.get("progress", 0.0)), message=job["error"])
             return
-        job["result"] = result
-        job["status"] = "completed"
-        _append_job_log(job, phase="completed", progress=1.0, message="Result ready")
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if not job:
+                return
+            job["result"] = result
+            job["status"] = "completed"
+            _append_job_log(job, phase="completed", progress=1.0, message="Result ready")
+        log_structured(
+            _LOGGER,
+            logging.INFO,
+            event="async_job_completed",
+            message="Async generation job completed",
+            kind="lifecycle",
+            component="api.jobs",
+            run_id=job_id,
+            job_id=job_id,
+            data={"status": "completed"},
+        )
 
 
 def _create_generate_job(payload: GenerateConfig) -> str:
@@ -171,6 +244,23 @@ def _create_generate_job(payload: GenerateConfig) -> str:
     }
     with _JOBS_LOCK:
         _JOBS[job_id] = job
+    try:
+        store = get_run_log_store()
+        if store.enabled:
+            store.start_run(job_id, job_id=job_id)
+    except Exception:
+        pass
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="async_job_created",
+        message="Async generation job created",
+        kind="lifecycle",
+        component="api.jobs",
+        run_id=job_id,
+        job_id=job_id,
+        data={"config_hash": config_hash(payload)},
+    )
     thread = threading.Thread(target=_run_generate_job, args=(job_id, payload), daemon=True, name=f"citygen-{job_id}")
     thread.start()
     return job_id
@@ -460,6 +550,22 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="job_not_found")
             return _job_status_payload(job, since_seq=int(since_seq))
 
+    @app.get("/api/v2/runs/{run_id}/logs", response_model=RunLogsResponse)
+    def get_run_logs(
+        run_id: str,
+        since_seq: int = Query(default=0, ge=0),
+        level: Optional[str] = Query(default=None),
+        kind: Optional[str] = Query(default=None),
+        limit: int = Query(default=500, ge=1, le=2000),
+    ) -> RunLogsResponse:
+        store = get_run_log_store()
+        if not store.enabled:
+            raise HTTPException(status_code=503, detail="run_logs_disabled")
+        result = store.get_logs(run_id, since_seq=int(since_seq), level=level, kind=kind, limit=int(limit))
+        if result is None:
+            raise HTTPException(status_code=404, detail="run_not_found")
+        return RunLogsResponse(**result)
+
     @app.get("/api/v2/jobs/{job_id}/result", response_model=StagedCityResponse)
     def get_generate_job_result(job_id: str) -> StagedCityResponse:
         with _JOBS_LOCK:
@@ -479,45 +585,127 @@ def create_app() -> FastAPI:
         """Stream city generation progress with incremental geometry data via SSE."""
 
         async def event_generator():
+            settings = get_observability_settings()
+            run_id = str(uuid4())
+            store = get_run_log_store()
+            if store.enabled:
+                store.start_run(run_id)
             buffer = StreamBuffer(flush_interval_ms=30.0, max_batch_size=8)
             result_holder: Dict[str, Any] = {"result": None, "error": None, "done": False}
             heartbeat_counter = 0
+            flush_count = 0
+            flushed_event_count = 0
+            max_batch_seen = 0
+            stream_t0 = time.perf_counter()
 
-            _LOGGER.info("SSE stream started")
+            log_structured(
+                _LOGGER,
+                logging.INFO,
+                event="sse_stream_started",
+                message="SSE stream started",
+                kind="lifecycle",
+                component="api.stream",
+                run_id=run_id,
+                data={"config_hash": config_hash(payload)},
+            )
+
+            def _count_batch_events(batch: Dict[str, Any]) -> int:
+                try:
+                    payload_obj = json.loads(str(batch.get("data", "{}")))
+                except Exception:
+                    return 0
+                events = payload_obj.get("events")
+                return len(events) if isinstance(events, list) else 0
 
             def stream_cb(event: Dict[str, Any]) -> None:
-                _LOGGER.debug("stream_cb received event: %s", event.get("event_type"))
+                if settings.verbose_stream_meta:
+                    meta = summarize_stream_event_meta(event)
+                    log_structured(
+                        _LOGGER,
+                        logging.DEBUG,
+                        event="sse_event_received",
+                        message=f"stream_cb received {meta.get('event_type', 'unknown')}",
+                        kind="sse_event_meta",
+                        component="api.stream",
+                        run_id=run_id,
+                        phase=str(meta.get("phase", "")) or None,
+                        data=meta,
+                    )
                 buffer.add(event)
 
             def progress_cb(phase: str, progress: float, message: str) -> None:
-                _LOGGER.debug("progress_cb: %s %.0f%% %s", phase, progress * 100, message)
+                log_structured(
+                    _LOGGER,
+                    logging.DEBUG if settings.progress_debug else logging.INFO,
+                    event="progress_cb",
+                    message=f"progress {phase} {progress * 100.0:.0f}%",
+                    kind="progress",
+                    component="api.stream",
+                    run_id=run_id,
+                    phase=str(phase),
+                    data={"progress": float(progress), "message": str(message)},
+                )
                 buffer.add({
                     "event_type": "progress",
                     "data": {"phase": phase, "progress": progress, "message": message},
                 }, urgent=True)
 
             def run_generation() -> None:
-                _LOGGER.info("Generation thread started")
-                try:
-                    result = generate_city_staged(
-                        payload,
-                        progress_cb=progress_cb,
-                        stream_cb=stream_cb,
+                with run_context(run_id):
+                    log_structured(
+                        _LOGGER,
+                        logging.INFO,
+                        event="sse_generation_thread_started",
+                        message="SSE generation thread started",
+                        kind="lifecycle",
+                        component="api.stream",
+                        run_id=run_id,
                     )
-                    result_holder["result"] = result
-                    _LOGGER.info("Generation completed successfully")
-                except Exception as exc:
-                    _LOGGER.error("Generation failed: %s", exc)
-                    result_holder["error"] = f"{exc.__class__.__name__}: {exc}"
-                finally:
-                    result_holder["done"] = True
+                    try:
+                        result = generate_city_staged(
+                            payload,
+                            progress_cb=progress_cb,
+                            stream_cb=stream_cb,
+                        )
+                        result_holder["result"] = result
+                        log_structured(
+                            _LOGGER,
+                            logging.INFO,
+                            event="sse_generation_completed",
+                            message="SSE generation completed successfully",
+                            kind="lifecycle",
+                            component="api.stream",
+                            run_id=run_id,
+                        )
+                    except Exception as exc:
+                        log_structured(
+                            _LOGGER,
+                            logging.ERROR,
+                            event="sse_generation_failed",
+                            message="SSE generation failed",
+                            kind="error",
+                            component="api.stream",
+                            run_id=run_id,
+                            exc=exc,
+                        )
+                        result_holder["error"] = f"{exc.__class__.__name__}: {exc}"
+                    finally:
+                        result_holder["done"] = True
 
             # Send initial heartbeat to confirm connection
-            yield {"event": "heartbeat", "data": json.dumps({"status": "connected", "seq": 0})}
-            _LOGGER.info("Sent initial heartbeat")
+            yield {"event": "heartbeat", "data": json.dumps({"status": "connected", "seq": 0, "run_id": run_id})}
+            log_structured(
+                _LOGGER,
+                logging.INFO,
+                event="sse_initial_heartbeat_sent",
+                message="Sent initial SSE heartbeat",
+                kind="lifecycle",
+                component="api.stream",
+                run_id=run_id,
+            )
 
             # Start generation in background thread
-            gen_thread = threading.Thread(target=run_generation, daemon=True)
+            gen_thread = threading.Thread(target=run_generation, daemon=True, name=f"citygen-sse-{run_id[:8]}")
             gen_thread.start()
 
             # Yield events as they come in
@@ -526,40 +714,119 @@ def create_app() -> FastAPI:
                     if buffer.should_flush():
                         batch = buffer.flush()
                         if batch:
-                            _LOGGER.debug("Yielding batch with events")
+                            n_events = _count_batch_events(batch)
+                            flush_count += 1
+                            flushed_event_count += n_events
+                            if n_events > max_batch_seen:
+                                max_batch_seen = n_events
+                            if settings.verbose_stream_meta:
+                                log_structured(
+                                    _LOGGER,
+                                    logging.DEBUG,
+                                    event="sse_batch_yielded",
+                                    message="Yielding SSE batch",
+                                    kind="phase_timing",
+                                    component="api.stream",
+                                    run_id=run_id,
+                                    data={
+                                        "batch_event_count": n_events,
+                                        "flush_count": flush_count,
+                                        "pending_after_flush": buffer.get_pending_count(),
+                                    },
+                                )
                             yield batch
                     else:
                         # Send heartbeat every ~2 seconds.
                         heartbeat_counter += 1
                         if heartbeat_counter >= 100:
                             heartbeat_counter = 0
-                            yield {"event": "heartbeat", "data": json.dumps({"status": "generating", "seq": buffer.sequence})}
+                            yield {
+                                "event": "heartbeat",
+                                "data": json.dumps({"status": "generating", "seq": buffer.sequence, "run_id": run_id}),
+                            }
                     await asyncio.sleep(0.02)
 
                 # Flush any remaining events
                 final_batch = buffer.flush()
                 if final_batch:
-                    _LOGGER.debug("Yielding final batch")
+                    n_events = _count_batch_events(final_batch)
+                    flush_count += 1
+                    flushed_event_count += n_events
+                    if n_events > max_batch_seen:
+                        max_batch_seen = n_events
+                    if settings.verbose_stream_meta:
+                        log_structured(
+                            _LOGGER,
+                            logging.DEBUG,
+                            event="sse_final_batch_yielded",
+                            message="Yielding final SSE batch",
+                            kind="phase_timing",
+                            component="api.stream",
+                            run_id=run_id,
+                            data={"batch_event_count": n_events, "flush_count": flush_count},
+                        )
                     yield final_batch
 
                 # Send completion or error event
                 if result_holder["error"]:
-                    _LOGGER.info("Sending error event: %s", result_holder["error"])
+                    log_structured(
+                        _LOGGER,
+                        logging.INFO,
+                        event="sse_error_sent",
+                        message="Sending SSE error event",
+                        kind="lifecycle",
+                        component="api.stream",
+                        run_id=run_id,
+                        data={"error": str(result_holder["error"])},
+                    )
                     yield {
                         "event": "error",
-                        "data": json.dumps({"error": result_holder["error"]}),
+                        "data": json.dumps({"error": result_holder["error"], "run_id": run_id}),
                     }
                 elif result_holder["result"]:
                     # Send final result as the actual staged payload (do not clobber final_artifact).
                     result_data = model_dump(result_holder["result"])
                     result_data["stream_complete"] = True
-                    _LOGGER.info("Sending complete event with result")
+                    result_data["run_id"] = run_id
+                    log_structured(
+                        _LOGGER,
+                        logging.INFO,
+                        event="sse_complete_sent",
+                        message="Sending SSE complete event with result",
+                        kind="lifecycle",
+                        component="api.stream",
+                        run_id=run_id,
+                    )
                     yield {
                         "event": "complete",
                         "data": json.dumps(result_data),
                     }
+                log_structured(
+                    _LOGGER,
+                    logging.INFO,
+                    event="sse_stream_finished",
+                    message="SSE stream finished",
+                    kind="phase_timing",
+                    component="api.stream",
+                    run_id=run_id,
+                    duration_ms=(time.perf_counter() - stream_t0) * 1000.0,
+                    data={
+                        "flush_count": flush_count,
+                        "flushed_event_count": flushed_event_count,
+                        "max_batch_event_count": max_batch_seen,
+                    },
+                )
             except asyncio.CancelledError:
-                _LOGGER.info("SSE stream cancelled by client")
+                log_structured(
+                    _LOGGER,
+                    logging.INFO,
+                    event="sse_stream_cancelled",
+                    message="SSE stream cancelled by client",
+                    kind="lifecycle",
+                    component="api.stream",
+                    run_id=run_id,
+                    data={"client_disconnect": True},
+                )
                 raise
 
         return EventSourceResponse(event_generator())

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from time import perf_counter
 from typing import Any, Callable, Dict, List, Sequence, Tuple
 
@@ -47,6 +48,7 @@ from engine.models import (
     TerrainLayer,
 )
 from engine.naming import assign_hub_names, get_toponymy_provider
+from engine.observability.logging import config_hash, log_structured
 from engine.pydantic_compat import model_dump
 from engine.roads import generate_roads
 from engine.roads.pedestrian import PEDESTRIAN_WIDTH_M
@@ -59,6 +61,7 @@ from engine.terrain.river_area import build_river_area_polygons
 from engine.traffic import assign_edge_flows
 
 SCHEMA_VERSION = "0.1.0"
+_LOGGER = logging.getLogger("citygen.generator")
 ProgressCallback = Callable[[str, float, str], None]
 StreamCallback = Callable[[Dict[str, Any]], None]
 
@@ -361,7 +364,7 @@ def _generate_core_context(
     def _road_progress_canonical(_phase: str, p: float, message: str) -> None:
         if road_progress_cb is None:
             return
-        road_progress_cb("roads", p, message)
+        road_progress_cb(_phase, p, message)
 
     road_result = generate_roads(
         hubs=hub_result.hubs,
@@ -695,6 +698,16 @@ def _build_city_artifact_from_core(
     ]
     if contact_parts:
         metric_notes.append("Classic local contact modes: " + ", ".join(contact_parts))
+    local_repel_eval = int(metric_values.get("local_classic_major_repel_eval_count", 0.0))
+    if local_repel_eval > 0:
+        local_repel_apply = int(metric_values.get("local_classic_major_repel_apply_count", 0.0))
+        local_repel_post_contact = int(metric_values.get("local_classic_major_repel_post_contact_boost_count", 0.0))
+        local_repel_avg_gain = float(metric_values.get("local_classic_major_repel_clearance_gain_avg_m", 0.0))
+        metric_notes.append(
+            "Classic local major-detach repel: "
+            f"applied {local_repel_apply}/{local_repel_eval} "
+            f"(post-contact {local_repel_post_contact}, avg clearance gain={local_repel_avg_gain:.1f}m)"
+        )
     supplement_budget = int(metric_values.get("local_grid_supplement_budget", 0.0))
     if supplement_budget > 0:
         supplement_added = int(metric_values.get("local_grid_supplement_added_count", 0.0))
@@ -1059,15 +1072,66 @@ def _build_analysis_and_land_layers(
 
 def generate_city(config: GenerateConfig, *, progress_cb: ProgressCallback | None = None) -> CityArtifact:
     t0 = perf_counter()
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_started",
+        message="City generation started",
+        kind="lifecycle",
+        component="generator",
+        data={
+            "seed": int(config.seed),
+            "extent_m": float(config.extent_m),
+            "grid_resolution": int(config.grid_resolution),
+            "config_hash": config_hash(config),
+        },
+    )
     _emit_progress(progress_cb, "start", 0.0, "Starting city generation")
+    t_core = perf_counter()
     ctx = _generate_core_context(config, progress_cb=_progress_subrange(progress_cb, 0.02, 0.62))
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_core_built",
+        message="Core generation context built",
+        kind="phase_timing",
+        component="generator",
+        duration_ms=(perf_counter() - t_core) * 1000.0,
+        data={
+            "hub_count": len(getattr(ctx.hub_result, "hubs", []) or []),
+            "road_edge_count": len(getattr(getattr(ctx, "road_result", None), "edges", []) or []),
+        },
+    )
     _emit_progress(progress_cb, "artifact", 0.68, "Building city artifact payload")
     artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
+    t_analysis = perf_counter()
     _build_analysis_and_land_layers(config, ctx, artifact, progress_cb=_progress_subrange(progress_cb, 0.70, 0.96))
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_analysis_built",
+        message="Analysis and land layers built",
+        kind="phase_timing",
+        component="generator",
+        duration_ms=(perf_counter() - t_analysis) * 1000.0,
+    )
     duration_ms = (perf_counter() - t0) * 1000.0
     artifact.meta.duration_ms = float(duration_ms)
     artifact.meta.generated_at_utc = datetime.now(timezone.utc).isoformat()
     _emit_progress(progress_cb, "done", 1.0, "City generation complete")
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_completed",
+        message="City generation completed",
+        kind="lifecycle",
+        component="generator",
+        duration_ms=duration_ms,
+        data={
+            "road_edge_count": len(artifact.roads.edges),
+            "hub_count": len(artifact.hubs),
+        },
+    )
     return artifact
 
 
@@ -1078,21 +1142,60 @@ def generate_city_staged(
     stream_cb: StreamCallback | None = None,
 ) -> StagedCityResponse:
     t0 = perf_counter()
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_staged_started",
+        message="Staged city generation started",
+        kind="lifecycle",
+        component="generator",
+        data={
+            "seed": int(config.seed),
+            "extent_m": float(config.extent_m),
+            "grid_resolution": int(config.grid_resolution),
+            "config_hash": config_hash(config),
+        },
+    )
     _emit_progress(progress_cb, "start", 0.0, "Starting staged city generation")
+    t_core = perf_counter()
     ctx = _generate_core_context(
         config,
         progress_cb=_progress_subrange(progress_cb, 0.02, 0.62),
         stream_cb=stream_cb,
     )
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_staged_core_built",
+        message="Staged core generation context built",
+        kind="phase_timing",
+        component="generator",
+        duration_ms=(perf_counter() - t_core) * 1000.0,
+        data={
+            "hub_count": len(getattr(ctx.hub_result, "hubs", []) or []),
+            "road_edge_count": len(getattr(getattr(ctx, "road_result", None), "edges", []) or []),
+        },
+    )
     _emit_progress(progress_cb, "artifact", 0.68, "Building base artifact")
     final_artifact = _build_city_artifact_from_core(config, ctx, duration_ms=0.0)
+    t_analysis = perf_counter()
     layers = _build_analysis_and_land_layers(config, ctx, final_artifact, progress_cb=_progress_subrange(progress_cb, 0.70, 0.93))
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_staged_analysis_built",
+        message="Staged analysis and land layers built",
+        kind="phase_timing",
+        component="generator",
+        duration_ms=(perf_counter() - t_analysis) * 1000.0,
+    )
 
     duration_ms = (perf_counter() - t0) * 1000.0
     final_artifact.meta.duration_ms = float(duration_ms)
     final_artifact.meta.generated_at_utc = datetime.now(timezone.utc).isoformat()
 
     _emit_progress(progress_cb, "stages", 0.96, "Building timeline stages")
+    t_stages = perf_counter()
     stages = build_stages(
         final_artifact=final_artifact,
         suitability_preview=layers.analysis.suitability,
@@ -1110,7 +1213,31 @@ def generate_city_staged(
         land_blocks=layers.land_blocks,
         parcel_lots=layers.parcel_lots,
     )
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_staged_timeline_built",
+        message="Timeline stages built",
+        kind="phase_timing",
+        component="generator",
+        duration_ms=(perf_counter() - t_stages) * 1000.0,
+        data={"stage_count": len(stages)},
+    )
     _emit_progress(progress_cb, "done", 1.0, "Staged city generation complete")
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="generate_city_staged_completed",
+        message="Staged city generation completed",
+        kind="lifecycle",
+        component="generator",
+        duration_ms=duration_ms,
+        data={
+            "stage_count": len(stages),
+            "road_edge_count": len(final_artifact.roads.edges),
+            "hub_count": len(final_artifact.hubs),
+        },
+    )
     return StagedCityResponse(final_artifact=final_artifact, stages=stages)
 
 

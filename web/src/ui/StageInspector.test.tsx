@@ -45,6 +45,62 @@ describe('StageInspector', () => {
     expect(screen.getByText('Expected Layers / 预计图层')).toBeInTheDocument();
   });
 
+  it('renders collector stage title for granular backend road phase', () => {
+    render(
+      <StageInspector
+        stage={null}
+        source="none"
+        generationContext={{
+          enabled: true,
+          progress: {
+            status: 'running',
+            progress: 0.49,
+            phase: 'roads_collector.freeze',
+            message: 'Froze Major Network geometry',
+            logs: [],
+          },
+          backendSteps: [
+            { id: 'start', title: 'Start', titleZh: '启动', status: 'done', localProgress: 1 },
+            { id: 'terrain', title: 'Terrain', titleZh: '地形', status: 'done', localProgress: 1 },
+            { id: 'roads', title: 'Roads', titleZh: '道路', status: 'active', localProgress: 0.6 },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText('次干道').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Collector Roads').length).toBeGreaterThan(0);
+    expect(screen.getByText('Froze Major Network geometry')).toBeInTheDocument();
+  });
+
+  it('renders local stage title for granular backend road phase', () => {
+    render(
+      <StageInspector
+        stage={null}
+        source="none"
+        generationContext={{
+          enabled: true,
+          progress: {
+            status: 'running',
+            progress: 0.58,
+            phase: 'roads_local.generation',
+            message: 'Filling blocks with local street network',
+            logs: [],
+          },
+          backendSteps: [
+            { id: 'start', title: 'Start', titleZh: '启动', status: 'done', localProgress: 1 },
+            { id: 'terrain', title: 'Terrain', titleZh: '地形', status: 'done', localProgress: 1 },
+            { id: 'roads', title: 'Roads', titleZh: '道路', status: 'active', localProgress: 0.85 },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText('本地道路').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Local Roads').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Filling blocks with local street network').length).toBeGreaterThan(0);
+  });
+
   it('renders staged artifact info in replay mode', () => {
     const stage: StageArtifact = {
       stage_id: 'terrain',

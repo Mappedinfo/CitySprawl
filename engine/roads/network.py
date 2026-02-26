@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import heapq
+import logging
 from math import atan2, cos, hypot, pi, sin
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -15,6 +16,9 @@ except ImportError:  # pragma: no cover - exercised in minimal environments
 from engine.core.geometry import Segment, Vec2, segment_intersection
 from engine.core.spatial import SpatialHashIndex
 from engine.hubs.sampling import HubPoint
+from engine.observability.logging import log_structured
+
+_LOGGER = logging.getLogger("citygen.roads.network")
 
 
 @dataclass
@@ -2919,6 +2923,22 @@ def generate_roads(
     Post-processing: Unified space syntax, final dedupe/snap/route, street-run aggregation.
     """
     road_total_t0 = perf_counter()
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="roads_generate_started",
+        message="Road generation started",
+        kind="lifecycle",
+        component="roads.network",
+        data={
+            "seed": int(seed),
+            "extent_m": float(extent_m),
+            "hub_count": len(hubs),
+            "k_neighbors": int(k_neighbors),
+            "loop_budget": int(loop_budget),
+            "collector_generator": str(collector_generator or ""),
+        },
+    )
     phase_ms: Dict[str, float] = {}
 
     def _phase_start() -> float:
@@ -3300,4 +3320,24 @@ def generate_roads(
     metrics["syntax_note_count"] = float(len(syntax_notes))
     metrics["intersection_note_count"] = float(len(inter_notes))
     _emit_road_progress(progress_cb, "roads.done", 1.0, "Road generation complete")
+    class_counts: Dict[str, int] = {}
+    for e in edges:
+        rc = str(getattr(e, "road_class", ""))
+        class_counts[rc] = class_counts.get(rc, 0) + 1
+    log_structured(
+        _LOGGER,
+        logging.INFO,
+        event="roads_generate_completed",
+        message="Road generation completed",
+        kind="phase_timing",
+        component="roads.network",
+        duration_ms=(perf_counter() - road_total_t0) * 1000.0,
+        data={
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "edge_count_by_class": class_counts,
+            "connected": bool(metrics.get("connected", 0.0) > 0.5),
+            "connectivity_ratio": float(metrics.get("connectivity_ratio", 0.0)),
+        },
+    )
     return RoadBuildResult(nodes=nodes, edges=edges, candidate_debug=candidate_debug, metrics=metrics)
