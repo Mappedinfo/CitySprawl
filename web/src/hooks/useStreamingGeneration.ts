@@ -221,6 +221,21 @@ export function useStreamingGeneration() {
               const event = item as StreamEvent;
               if (event.event_type === 'progress') {
                 if (isCurrent()) setProgress(event.data);
+              } else if (event.event_type === 'road_phase_start') {
+                // Map road phase to canonical UI phase for layer activation
+                const roadPhase = event.data.phase;
+                const uiPhase =
+                  roadPhase === 'arterial' ? 'roads_arterial' :
+                  roadPhase === 'major_local' ? 'roads_collector' :
+                  roadPhase === 'minor_local' ? 'roads_local' :
+                  roadPhase;
+                if (isCurrent()) {
+                  setProgress((prev) => ({
+                    ...prev,
+                    phase: uiPhase,
+                    message: `Generating ${roadPhase.replace('_', ' ')} roads`,
+                  }));
+                }
               } else {
                 if (isCurrent()) setState((prev) => mergeEvent(prev, event));
               }

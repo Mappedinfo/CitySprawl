@@ -37,6 +37,33 @@ type Params = {
   cssHeight: number;
 };
 
+// Unified road colors - consistent across all animation phases
+const ROAD_COLORS = {
+  arterial: {
+    base: 'rgba(236, 246, 255, 0.98)',
+    glow: 'rgba(246, 252, 255, 1.0)',
+    shadow: 'rgba(200, 230, 255, 0.8)',
+    shadowBlur: 8,
+    lineWidth: 3,
+  },
+  major_local: {
+    base: 'rgba(194, 238, 255, 0.88)',
+    glow: 'rgba(214, 245, 255, 0.98)',
+    shadow: 'rgba(160, 210, 255, 0.7)',
+    shadowBlur: 6,
+    lineWidth: 2.5,
+  },
+  minor_local: {
+    base: 'rgba(136, 214, 245, 0.72)',
+    glow: 'rgba(166, 230, 255, 0.92)',
+    shadow: 'rgba(120, 190, 230, 0.6)',
+    shadowBlur: 4,
+    lineWidth: 1.8,
+  },
+} as const;
+
+type RoadClass = keyof typeof ROAD_COLORS;
+
 function hasStageLayer(stage: StageArtifact | null, key: string): boolean {
   if (!stage) return false;
   return stage.visible_layers.includes(key);
@@ -385,7 +412,9 @@ export function drawStageScene({
     terrain: layers.terrain && (!stage || hasStageLayer(stage, 'terrain')),
     rivers: layers.rivers && (!stage || hasStageLayer(stage, 'rivers') || hasStageLayer(stage, 'river_areas')),
     roads: roadNetworkEnabled && (!stage || hasStageLayer(stage, 'roads')) && stage?.stage_id !== 'stages' && stage?.stage_id !== 'done',
-    debugCandidates: layers.debugCandidates && stage?.stage_id === 'roads',
+    debugCandidates: layers.debugCandidates && (
+      stage?.stage_id === 'roads' || String(stage?.stage_id || '').startsWith('roads_')
+    ),
     showArterialRoads: layers.arterialRoads,
     showMajorLocalRoads: layers.majorLocalRoads,
     showMinorLocalRoads: layers.minorLocalRoads,
@@ -534,19 +563,19 @@ export function drawStreamingTraces(
     if (trace.points.length < 2) continue;
     if (!isStreamingRoadVisible(layers, trace.road_class, trace.trace_id)) continue;
 
-    // Color based on road class
+    // Color based on road class - unified with final render colors
     if (trace.road_class === 'arterial') {
-      ctx.strokeStyle = 'rgba(255, 200, 120, 0.9)';
-      ctx.lineWidth = 3;
+      ctx.strokeStyle = ROAD_COLORS.arterial.base;
+      ctx.lineWidth = ROAD_COLORS.arterial.lineWidth;
     } else if (trace.road_class === 'major_local') {
-      ctx.strokeStyle = 'rgba(200, 220, 255, 0.85)';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = ROAD_COLORS.major_local.base;
+      ctx.lineWidth = ROAD_COLORS.major_local.lineWidth;
     } else if (trace.road_class === 'minor_local') {
-      ctx.strokeStyle = 'rgba(120, 255, 180, 0.7)';
-      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = ROAD_COLORS.minor_local.base;
+      ctx.lineWidth = ROAD_COLORS.minor_local.lineWidth;
     } else {
-      ctx.strokeStyle = 'rgba(180, 200, 230, 0.75)';
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = ROAD_COLORS.minor_local.base;
+      ctx.lineWidth = ROAD_COLORS.minor_local.lineWidth;
     }
 
     ctx.beginPath();
@@ -561,7 +590,9 @@ export function drawStreamingTraces(
     if (trace.culdesac && trace.points.length > 0) {
       const last = trace.points[trace.points.length - 1];
       const s = worldToScreen(last.x, last.y, extent, cssWidth, cssHeight, viewport);
-      ctx.fillStyle = 'rgba(255, 180, 120, 0.8)';
+      // Use road class color for culdesac indicator
+      const roadClass = (trace.road_class as RoadClass) || 'minor_local';
+      ctx.fillStyle = ROAD_COLORS[roadClass in ROAD_COLORS ? roadClass : 'minor_local'].glow;
       ctx.beginPath();
       ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
       ctx.fill();
@@ -573,18 +604,19 @@ export function drawStreamingTraces(
     for (const [, edge] of data.polylineEdges) {
       if (!edge.pathPoints || edge.pathPoints.length < 2) continue;
       if (!isStreamingRoadVisible(layers, edge.roadClass, edge.id)) continue;
+      // Use unified colors for polyline edges
       if (edge.roadClass === 'arterial') {
-        ctx.strokeStyle = 'rgba(236, 246, 255, 0.88)';
-        ctx.lineWidth = 2.8;
+        ctx.strokeStyle = ROAD_COLORS.arterial.base;
+        ctx.lineWidth = ROAD_COLORS.arterial.lineWidth;
       } else if (edge.roadClass === 'major_local') {
-        ctx.strokeStyle = 'rgba(194, 238, 255, 0.72)';
-        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = ROAD_COLORS.major_local.base;
+        ctx.lineWidth = ROAD_COLORS.major_local.lineWidth;
       } else if (edge.roadClass === 'minor_local') {
-        ctx.strokeStyle = 'rgba(136, 214, 245, 0.45)';
-        ctx.lineWidth = 1.1;
+        ctx.strokeStyle = ROAD_COLORS.minor_local.base;
+        ctx.lineWidth = ROAD_COLORS.minor_local.lineWidth;
       } else {
-        ctx.strokeStyle = 'rgba(180, 210, 240, 0.5)';
-        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = ROAD_COLORS.minor_local.base;
+        ctx.lineWidth = ROAD_COLORS.minor_local.lineWidth;
       }
       ctx.beginPath();
       edge.pathPoints.forEach((p, i) => {
@@ -596,16 +628,27 @@ export function drawStreamingTraces(
     }
   }
 
-  // Draw partial traces (growing, with animation)
+  // Draw partial traces (growing, with animation and glow effect)
   for (const [traceId, points] of data.partialTraces) {
     if (points.length < 2) continue;
     if (!isStreamingRoadVisible(layers, undefined, traceId)) continue;
 
-    const isCollector = traceId.startsWith('major_local-trace-');
-    ctx.strokeStyle = isCollector
-      ? 'rgba(100, 220, 255, 0.95)'
-      : 'rgba(255, 220, 100, 0.95)';
-    ctx.lineWidth = isCollector ? 3 : 2;
+    // Determine road class from traceId
+    let roadClass: RoadClass = 'minor_local';
+    if (traceId.startsWith('arterial-trace-') || traceId.includes('arterial')) {
+      roadClass = 'arterial';
+    } else if (traceId.startsWith('major_local-trace-') || traceId.includes('major_local')) {
+      roadClass = 'major_local';
+    }
+
+    const colorConfig = ROAD_COLORS[roadClass];
+
+    // Apply glow effect for growing roads
+    ctx.save();
+    ctx.shadowBlur = colorConfig.shadowBlur;
+    ctx.shadowColor = colorConfig.shadow;
+    ctx.strokeStyle = colorConfig.glow;
+    ctx.lineWidth = colorConfig.lineWidth;
 
     ctx.beginPath();
     points.forEach((p, i) => {
@@ -614,34 +657,40 @@ export function drawStreamingTraces(
       else ctx.lineTo(s.x, s.y);
     });
     ctx.stroke();
+    ctx.restore();
 
     // Draw pulsing head at the last point
     const last = points[points.length - 1];
     const s = worldToScreen(last.x, last.y, extent, cssWidth, cssHeight, viewport);
     const pulse = (nowMs % 800) / 800;
-    const radius = 4 + pulse * (isCollector ? 10 : 6);
+    const pulseSize = roadClass === 'arterial' ? 12 : roadClass === 'major_local' ? 10 : 6;
+    const radius = 4 + pulse * pulseSize;
     const alpha = 1 - pulse;
 
+    // Outer glow ring
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, radius * 1.2, 0, Math.PI * 2);
+    ctx.strokeStyle = colorConfig.shadow.replace(/[\d.]+\)$/, `${alpha * 0.5})`);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Main pulse ring
     ctx.beginPath();
     ctx.arc(s.x, s.y, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = isCollector
-      ? `rgba(100, 220, 255, ${alpha})`
-      : `rgba(255, 220, 100, ${alpha})`;
+    ctx.strokeStyle = colorConfig.glow.replace(/[\d.]+\)$/, `${alpha})`);
     ctx.lineWidth = 2;
     ctx.stroke();
 
     // Solid center dot
     ctx.beginPath();
     ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = isCollector
-      ? 'rgba(180, 240, 255, 1)'
-      : 'rgba(255, 240, 180, 1)';
+    ctx.fillStyle = colorConfig.glow;
     ctx.fill();
   }
 
-  // Draw incremental nodes (if available)
+  // Draw incremental nodes (if available) - use unified blue color
   if (hasAnyStreamingRoadLayersEnabled(layers) && data.nodes && data.nodes.size > 0) {
-    ctx.fillStyle = 'rgba(255, 200, 100, 0.8)';
+    ctx.fillStyle = ROAD_COLORS.major_local.glow;
     for (const [, node] of data.nodes) {
       const s = worldToScreen(node.x, node.y, extent, cssWidth, cssHeight, viewport);
       ctx.beginPath();
@@ -650,7 +699,7 @@ export function drawStreamingTraces(
     }
   }
 
-  // Draw incremental edges (if nodes are available for lookup)
+  // Draw incremental edges (if nodes are available for lookup) - use unified colors
   if (
     hasAnyStreamingRoadLayersEnabled(layers)
     && (!data.polylineEdges || data.polylineEdges.size === 0)
@@ -659,13 +708,17 @@ export function drawStreamingTraces(
     && data.nodes
     && data.nodes.size > 0
   ) {
-    ctx.strokeStyle = 'rgba(200, 180, 255, 0.7)';
-    ctx.lineWidth = 1.5;
     for (const [, edge] of data.edges) {
       if (!isStreamingRoadVisible(layers, edge.road_class, edge.id)) continue;
       const uNode = data.nodes.get(edge.u);
       const vNode = data.nodes.get(edge.v);
       if (!uNode || !vNode) continue;
+
+      // Use unified color based on road class
+      const roadClass = (edge.road_class as RoadClass) || 'minor_local';
+      const colorConfig = ROAD_COLORS[roadClass in ROAD_COLORS ? roadClass : 'minor_local'];
+      ctx.strokeStyle = colorConfig.base;
+      ctx.lineWidth = colorConfig.lineWidth;
 
       const s1 = worldToScreen(uNode.x, uNode.y, extent, cssWidth, cssHeight, viewport);
       const s2 = worldToScreen(vNode.x, vNode.y, extent, cssWidth, cssHeight, viewport);

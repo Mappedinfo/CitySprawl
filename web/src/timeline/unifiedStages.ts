@@ -201,6 +201,10 @@ export const PHASE_ALIASES: Record<string, CanonicalStageId> = {
   'roads.route_final': 'roads_local',
   'roads.street_runs': 'roads_local',
   'roads.done': 'roads_local',
+  // Map road_phase_start event phase values
+  arterial: 'roads_arterial',
+  major_local: 'roads_collector',
+  minor_local: 'roads_local',
 };
 
 type LegacyStageId = 'terrain' | 'analysis' | 'infrastructure' | 'traffic' | 'final_preview';
