@@ -67,8 +67,9 @@ function renderControls(overrides: Partial<ComponentProps<typeof Controls>> = {}
     layers: {
       terrain: true,
       rivers: true,
-      majorRoads: true,
-      localRoads: true,
+      arterialRoads: true,
+      majorLocalRoads: true,
+      minorLocalRoads: true,
       contours: true,
       blocks: true,
       parcels: true,
@@ -116,9 +117,10 @@ describe('Controls layers groups', () => {
       'Parcels',
       'Buildings',
       'Green Zones',
-      'Major Roads',
+      'Arterial Roads',
+      'Major Local Roads',
       'Minor Local Roads',
-      'Ped Paths',
+      'Pedestrian Paths',
       'Candidate Edges',
       'Traffic Heat',
       'Resource Sites',
@@ -135,16 +137,18 @@ describe('Controls layers groups', () => {
     const layersSection = getLayersSection();
     const lineGroup = layersSection.querySelector('[data-layer-group="line"]');
     expect(lineGroup).not.toBeNull();
-    const scoped = within(lineGroup as HTMLElement);
 
-    const majorRoadsItem = scoped.getByLabelText('Major Roads').closest('.layer-item');
-    const localRoadsItem = scoped.getByLabelText('Minor Local Roads').closest('.layer-item');
+    const arterialRoadsItem = lineGroup?.querySelector('[data-layer-key="arterialRoads"]');
+    const majorLocalRoadsItem = lineGroup?.querySelector('[data-layer-key="majorLocalRoads"]');
+    const minorLocalRoadsItem = lineGroup?.querySelector('[data-layer-key="minorLocalRoads"]');
 
-    expect(scoped.queryByLabelText('Roads')).not.toBeInTheDocument();
-    expect(majorRoadsItem).toBeInTheDocument();
-    expect(localRoadsItem).toBeInTheDocument();
-    expect(majorRoadsItem).not.toHaveClass('is-child');
-    expect(localRoadsItem).not.toHaveClass('is-child');
+    expect(lineGroup?.querySelector('[data-layer-key="roads"]')).toBeNull();
+    expect(arterialRoadsItem).toBeInTheDocument();
+    expect(majorLocalRoadsItem).toBeInTheDocument();
+    expect(minorLocalRoadsItem).toBeInTheDocument();
+    expect(arterialRoadsItem).not.toHaveClass('is-child');
+    expect(majorLocalRoadsItem).not.toHaveClass('is-child');
+    expect(minorLocalRoadsItem).not.toHaveClass('is-child');
   });
 
   it('calls onLayerToggle with the correct key when toggling a grouped layer', async () => {
@@ -152,19 +156,19 @@ describe('Controls layers groups', () => {
     const onLayerToggle = vi.fn();
     renderControls({ onLayerToggle });
     const layersSection = getLayersSection();
-    const scoped = within(layersSection);
 
-    await user.click(scoped.getByLabelText('Major Roads'));
-    expect(onLayerToggle).toHaveBeenCalledWith('majorRoads');
+    const arterialRoadsCheckbox = layersSection.querySelector('[data-layer-key="arterialRoads"] input');
+    expect(arterialRoadsCheckbox).not.toBeNull();
+    await user.click(arterialRoadsCheckbox!);
+    expect(onLayerToggle).toHaveBeenCalledWith('arterialRoads');
   });
 
   it('renders inline legends for layer rows', () => {
     renderControls();
     const layersSection = getLayersSection();
-    const scoped = within(layersSection);
 
-    for (const label of ['Terrain', 'Major Roads', 'Traffic Heat']) {
-      const row = scoped.getByLabelText(label).closest('.layer-item');
+    for (const layerKey of ['terrain', 'arterialRoads', 'traffic']) {
+      const row = layersSection.querySelector(`[data-layer-key="${layerKey}"]`);
       expect(row).not.toBeNull();
       expect(row?.querySelector('.layer-item-legend')).not.toBeNull();
     }
@@ -177,22 +181,21 @@ describe('Controls layers groups', () => {
       onLayerToggle,
       layerUiState: {
         isGenerationPhase: true,
-        reachedLayerKeys: ['terrain', 'contours', 'rivers', 'majorRoads'],
-        activeLayerKeys: ['majorRoads'],
+        reachedLayerKeys: ['terrain', 'contours', 'rivers', 'arterialRoads'],
+        activeLayerKeys: ['arterialRoads'],
         activeGroupIds: ['line'],
       },
     });
 
     const layersSection = getLayersSection();
-    const scoped = within(layersSection);
-    const major = scoped.getByLabelText('Major Roads') as HTMLInputElement;
-    const parcels = scoped.getByLabelText('Parcels') as HTMLInputElement;
+    const arterial = layersSection.querySelector('[data-layer-key="arterialRoads"] input') as HTMLInputElement;
+    const parcels = layersSection.querySelector('[data-layer-key="parcels"] input') as HTMLInputElement;
 
-    expect(major.disabled).toBe(false);
+    expect(arterial.disabled).toBe(false);
     expect(parcels.disabled).toBe(true);
 
-    await user.click(major);
-    expect(onLayerToggle).toHaveBeenCalledWith('majorRoads');
+    await user.click(arterial);
+    expect(onLayerToggle).toHaveBeenCalledWith('arterialRoads');
 
     await user.click(parcels);
     expect(onLayerToggle).toHaveBeenCalledTimes(1);
@@ -202,8 +205,8 @@ describe('Controls layers groups', () => {
     renderControls({
       layerUiState: {
         isGenerationPhase: true,
-        reachedLayerKeys: ['terrain', 'contours', 'rivers', 'majorRoads', 'localRoads', 'debugCandidates'],
-        activeLayerKeys: ['majorRoads', 'localRoads', 'debugCandidates'],
+        reachedLayerKeys: ['terrain', 'contours', 'rivers', 'arterialRoads', 'majorLocalRoads', 'debugCandidates'],
+        activeLayerKeys: ['arterialRoads', 'majorLocalRoads', 'debugCandidates'],
         activeGroupIds: ['line'],
       },
     });
@@ -212,9 +215,8 @@ describe('Controls layers groups', () => {
     const lineGroupTitle = lineGroup.querySelector('.layer-group-title');
     expect(lineGroupTitle).toHaveClass('is-active-group');
 
-    const scoped = within(lineGroup);
-    expect(scoped.getByLabelText('Major Roads').closest('.layer-item')).toHaveClass('is-active-generating');
-    expect(scoped.getByLabelText('Minor Local Roads').closest('.layer-item')).toHaveClass('is-active-generating');
-    expect(scoped.getByLabelText('Candidate Edges').closest('.layer-item')).toHaveClass('is-active-generating');
+    expect(lineGroup.querySelector('[data-layer-key="arterialRoads"]')).toHaveClass('is-active-generating');
+    expect(lineGroup.querySelector('[data-layer-key="majorLocalRoads"]')).toHaveClass('is-active-generating');
+    expect(lineGroup.querySelector('[data-layer-key="debugCandidates"]')).toHaveClass('is-active-generating');
   });
 });

@@ -291,8 +291,9 @@ export default function App() {
   const [layers, setLayers] = useState<LayerState>({
     terrain: true,
     rivers: true,
-    majorRoads: true,
-    localRoads: true,
+    arterialRoads: true,
+    majorLocalRoads: true,
+    minorLocalRoads: true,
     contours: true,
     blocks: true,
     parcels: true,

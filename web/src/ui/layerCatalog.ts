@@ -12,8 +12,9 @@ export type LayerLegendKind =
   | 'polygon'
   | 'buildings'
   | 'green'
-  | 'majorRoads'
-  | 'localRoads'
+  | 'arterialRoads'
+  | 'majorLocalRoads'
+  | 'minorLocalRoads'
   | 'pedPath'
   | 'candidate'
   | 'traffic'
@@ -45,12 +46,13 @@ export type LayerUiState = {
 export const LAYER_LABELS: Record<LayerKey, string> = {
   terrain: 'Terrain',
   rivers: 'Rivers',
-  majorRoads: 'Major Roads',
-  localRoads: 'Minor Local Roads',
+  arterialRoads: 'Arterial Roads',
+  majorLocalRoads: 'Major Local Roads',
+  minorLocalRoads: 'Minor Local Roads',
   contours: 'Contours',
   blocks: 'Blocks',
   parcels: 'Parcels',
-  pedestrianPaths: 'Ped Paths',
+  pedestrianPaths: 'Pedestrian Paths',
   debugCandidates: 'Candidate Edges',
   labels: 'Labels',
   analysis: 'Analysis Heatmaps',
@@ -60,11 +62,31 @@ export const LAYER_LABELS: Record<LayerKey, string> = {
   greenZones: 'Green Zones',
 };
 
+export const LAYER_LABELS_ZH: Record<LayerKey, string> = {
+  terrain: '地形',
+  rivers: '河流',
+  arterialRoads: '主干道',
+  majorLocalRoads: '主支路',
+  minorLocalRoads: '次支路',
+  contours: '等高线',
+  blocks: '街区',
+  parcels: '地块',
+  pedestrianPaths: '步行路径',
+  debugCandidates: '候选边',
+  labels: '标签',
+  analysis: '分析热图',
+  resources: '资源站点',
+  traffic: '交通热力',
+  buildings: '建筑',
+  greenZones: '绿地',
+};
+
 export const LAYER_LEGEND_SPECS: Record<LayerKey, LayerLegendSpec> = {
   terrain: { kind: 'terrain' },
   rivers: { kind: 'rivers' },
-  majorRoads: { kind: 'majorRoads' },
-  localRoads: { kind: 'localRoads' },
+  arterialRoads: { kind: 'arterialRoads' },
+  majorLocalRoads: { kind: 'majorLocalRoads' },
+  minorLocalRoads: { kind: 'minorLocalRoads' },
   contours: { kind: 'contours' },
   blocks: { kind: 'polygon' },
   parcels: { kind: 'polygon' },
@@ -93,8 +115,9 @@ export const LAYER_GROUPS: LayerGroupDef[] = [
     id: 'line',
     label: 'Line / 线',
     items: [
-      { key: 'majorRoads' },
-      { key: 'localRoads' },
+      { key: 'arterialRoads' },
+      { key: 'majorLocalRoads' },
+      { key: 'minorLocalRoads' },
       { key: 'pedestrianPaths' },
       { key: 'debugCandidates' },
       { key: 'traffic' },
@@ -122,12 +145,12 @@ export const CANONICAL_STAGE_TO_UI_LAYER_KEYS: Record<CanonicalStageId, LayerKey
   terrain: ['terrain', 'contours'],
   rivers: ['rivers'],
   hubs: ['labels'],
-  roads_arterial: ['majorRoads', 'debugCandidates'],
-  roads_collector: ['majorRoads', 'debugCandidates'],
-  roads_local: ['majorRoads', 'localRoads', 'debugCandidates'],
+  roads_arterial: ['arterialRoads', 'debugCandidates'],
+  roads_collector: ['arterialRoads', 'majorLocalRoads', 'debugCandidates'],
+  roads_local: ['arterialRoads', 'majorLocalRoads', 'minorLocalRoads', 'debugCandidates'],
   artifact: [],
   analysis: ['analysis', 'resources'],
-  traffic: ['traffic', 'majorRoads', 'localRoads'],
+  traffic: ['traffic', 'arterialRoads', 'majorLocalRoads', 'minorLocalRoads'],
   buildings: ['buildings', 'greenZones'],
   parcels: ['blocks', 'parcels', 'pedestrianPaths'],
   stages: [],

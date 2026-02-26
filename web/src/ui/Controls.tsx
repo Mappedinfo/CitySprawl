@@ -3,6 +3,7 @@ import {
   ALL_LAYER_KEYS,
   LAYER_GROUPS,
   LAYER_LABELS,
+  LAYER_LABELS_ZH,
   LAYER_LEGEND_SPECS,
   type LayerGroupId,
   type LayerKey,
@@ -23,8 +24,9 @@ type Props = {
   layers: {
     terrain: boolean;
     rivers: boolean;
-    majorRoads: boolean;
-    localRoads: boolean;
+    arterialRoads: boolean;
+    majorLocalRoads: boolean;
+    minorLocalRoads: boolean;
     contours: boolean;
     blocks: boolean;
     parcels: boolean;
@@ -113,17 +115,22 @@ function LegendGlyph({ layerKey }: { layerKey: LayerKey }) {
           <span className="legend-green-leaf" />
         </span>
       );
-    case 'majorRoads':
+    case 'arterialRoads':
       return (
-        <span className="legend-glyph legend-major-roads" aria-hidden="true">
-          <span className="legend-road-major line-a" />
-          <span className="legend-road-major line-b" />
+        <span className="legend-glyph legend-arterial-roads" aria-hidden="true">
+          <span className="legend-road-arterial" />
         </span>
       );
-    case 'localRoads':
+    case 'majorLocalRoads':
       return (
-        <span className="legend-glyph legend-local-roads" aria-hidden="true">
-          <span className="legend-road-local" />
+        <span className="legend-glyph legend-major-local-roads" aria-hidden="true">
+          <span className="legend-road-major-local" />
+        </span>
+      );
+    case 'minorLocalRoads':
+      return (
+        <span className="legend-glyph legend-minor-local-roads" aria-hidden="true">
+          <span className="legend-road-minor-local" />
         </span>
       );
     case 'pedPath':
@@ -411,7 +418,10 @@ export function Controls({
                           onChange={() => onLayerToggle(key)}
                         />
                         <span className="layer-item-main">
-                          <span className="layer-item-label">{LAYER_LABELS[key]}</span>
+                          <span className="layer-item-label">
+                            <span className="layer-label-zh">{LAYER_LABELS_ZH[key]}</span>
+                            <span className="layer-label-en">{LAYER_LABELS[key]}</span>
+                          </span>
                           <span className="layer-item-legend">
                             <LegendGlyph layerKey={key} />
                           </span>

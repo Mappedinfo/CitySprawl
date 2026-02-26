@@ -5,8 +5,9 @@ import { isStreamingRoadVisible, type LayerToggles } from './stageRenderer';
 const allOn: LayerToggles = {
   terrain: true,
   rivers: true,
-  majorRoads: true,
-  localRoads: true,
+  arterialRoads: true,
+  majorLocalRoads: true,
+  minorLocalRoads: true,
   contours: true,
   blocks: true,
   parcels: true,
@@ -21,28 +22,28 @@ const allOn: LayerToggles = {
 };
 
 describe('isStreamingRoadVisible', () => {
-  it('filters major/local/ped classes by corresponding layer toggles', () => {
-    expect(isStreamingRoadVisible({ ...allOn, majorRoads: false }, 'arterial')).toBe(false);
-    expect(isStreamingRoadVisible({ ...allOn, majorRoads: false }, 'major_local')).toBe(false);
-    expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, 'minor_local')).toBe(false);
-    expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, 'service')).toBe(false);
+  it('filters arterial/major_local/minor_local/ped classes by corresponding layer toggles', () => {
+    expect(isStreamingRoadVisible({ ...allOn, arterialRoads: false }, 'arterial')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, majorLocalRoads: false }, 'major_local')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, minorLocalRoads: false }, 'minor_local')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, minorLocalRoads: false }, 'service')).toBe(false);
     expect(isStreamingRoadVisible({ ...allOn, pedestrianPaths: false }, 'pedestrian')).toBe(false);
   });
 
   it('falls back to trace id hints for partial traces', () => {
-    expect(isStreamingRoadVisible({ ...allOn, majorRoads: false }, undefined, 'major_local-trace-1')).toBe(false);
-    expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, undefined, 'minor_local-trace-2')).toBe(false);
-    expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, undefined, 'unknown-trace')).toBe(true);
+    expect(isStreamingRoadVisible({ ...allOn, arterialRoads: false }, undefined, 'arterial-trace-1')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, majorLocalRoads: false }, undefined, 'major_local-trace-1')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, minorLocalRoads: false }, undefined, 'minor_local-trace-2')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, minorLocalRoads: false }, undefined, 'unknown-trace')).toBe(true);
   });
 
   it('hides unknown traces when all road layers are off', () => {
     expect(
       isStreamingRoadVisible(
-        { ...allOn, majorRoads: false, localRoads: false, pedestrianPaths: false },
+        { ...allOn, arterialRoads: false, majorLocalRoads: false, minorLocalRoads: false, pedestrianPaths: false },
         undefined,
         'mystery-trace',
       ),
     ).toBe(false);
   });
 });
-

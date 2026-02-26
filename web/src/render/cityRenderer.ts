@@ -6,8 +6,9 @@ export type LayerFlags = {
   rivers: boolean;
   roads: boolean;
   debugCandidates: boolean;
-  showMajorRoads?: boolean;
-  showLocalRoads?: boolean;
+  showArterialRoads?: boolean;
+  showMajorLocalRoads?: boolean;
+  showMinorLocalRoads?: boolean;
   showPedestrianRoads?: boolean;
   transparentBackground?: boolean;
   cssWidth?: number;
@@ -227,8 +228,9 @@ export function drawCity(
 
   if (layers.roads) {
     const nodeMap = new Map(artifact.roads.nodes.map((n) => [n.id, n]));
-    const showMajorRoads = layers.showMajorRoads ?? true;
-    const showLocalRoads = layers.showLocalRoads ?? true;
+    const showArterialRoads = layers.showArterialRoads ?? true;
+    const showMajorLocalRoads = layers.showMajorLocalRoads ?? true;
+    const showMinorLocalRoads = layers.showMinorLocalRoads ?? true;
     const showPedRoads = layers.showPedestrianRoads ?? true;
     const lodHideLocal = viewport.scale < 1.35;
     const edges = [...artifact.roads.edges].sort((a, b) => {
@@ -237,12 +239,14 @@ export function drawCity(
     });
     ctx.save();
     for (const edge of edges) {
-      const isMajor = edge.road_class === 'arterial' || edge.road_class === 'major_local';
+      const isArterial = edge.road_class === 'arterial';
+      const isMajorLocal = edge.road_class === 'major_local';
       const isPed = edge.road_class === 'pedestrian';
-      const isLocal = !isMajor && !isPed;
-      if (isMajor && !showMajorRoads) continue;
+      const isMinorLocal = !isArterial && !isMajorLocal && !isPed;
+      if (isArterial && !showArterialRoads) continue;
+      if (isMajorLocal && !showMajorLocalRoads) continue;
       if (isPed && !showPedRoads) continue;
-      if (isLocal && (!showLocalRoads || lodHideLocal)) continue;
+      if (isMinorLocal && (!showMinorLocalRoads || lodHideLocal)) continue;
       const u = nodeMap.get(edge.u);
       const v = nodeMap.get(edge.v);
       if (!u || !v) continue;

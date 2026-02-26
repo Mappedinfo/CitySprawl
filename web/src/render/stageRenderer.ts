@@ -7,8 +7,9 @@ import { worldToScreen, type Viewport } from './viewport';
 export type LayerToggles = {
   terrain: boolean;
   rivers: boolean;
-  majorRoads: boolean;
-  localRoads: boolean;
+  arterialRoads: boolean;
+  majorLocalRoads: boolean;
+  minorLocalRoads: boolean;
   contours: boolean;
   blocks: boolean;
   parcels: boolean;
@@ -361,7 +362,7 @@ export function drawStageScene({
   cssWidth,
   cssHeight,
 }: Params): void {
-  const roadNetworkEnabled = layers.majorRoads || layers.localRoads || layers.pedestrianPaths;
+  const roadNetworkEnabled = layers.arterialRoads || layers.majorLocalRoads || layers.minorLocalRoads || layers.pedestrianPaths;
 
   if (!artifact) {
     drawCity(ctx, artifact, viewport, terrainBitmap, {
@@ -369,8 +370,9 @@ export function drawStageScene({
       rivers: false,
       roads: roadNetworkEnabled,
       debugCandidates: false,
-      showMajorRoads: layers.majorRoads,
-      showLocalRoads: layers.localRoads,
+      showArterialRoads: layers.arterialRoads,
+      showMajorLocalRoads: layers.majorLocalRoads,
+      showMinorLocalRoads: layers.minorLocalRoads,
       showPedestrianRoads: layers.pedestrianPaths,
       transparentBackground,
       cssWidth,
@@ -384,8 +386,9 @@ export function drawStageScene({
     rivers: layers.rivers && (!stage || hasStageLayer(stage, 'rivers') || hasStageLayer(stage, 'river_areas')),
     roads: roadNetworkEnabled && (!stage || hasStageLayer(stage, 'roads')) && stage?.stage_id !== 'stages' && stage?.stage_id !== 'done',
     debugCandidates: layers.debugCandidates && stage?.stage_id === 'roads',
-    showMajorRoads: layers.majorRoads,
-    showLocalRoads: layers.localRoads,
+    showArterialRoads: layers.arterialRoads,
+    showMajorLocalRoads: layers.majorLocalRoads,
+    showMinorLocalRoads: layers.minorLocalRoads,
     showPedestrianRoads: layers.pedestrianPaths,
     transparentBackground,
     cssWidth,
@@ -437,8 +440,9 @@ export function drawStageScene({
         rivers: false,
         roads: true,
         debugCandidates: false,
-        showMajorRoads: layers.majorRoads,
-        showLocalRoads: layers.localRoads,
+        showArterialRoads: layers.arterialRoads,
+        showMajorLocalRoads: layers.majorLocalRoads,
+        showMinorLocalRoads: layers.minorLocalRoads,
         showPedestrianRoads: layers.pedestrianPaths,
         transparentBackground: true,
         preserveCanvas: true,
@@ -480,7 +484,7 @@ export type StreamingTraceData = {
 };
 
 function hasAnyStreamingRoadLayersEnabled(layers: LayerToggles): boolean {
-  return Boolean(layers.majorRoads || layers.localRoads || layers.pedestrianPaths);
+  return Boolean(layers.arterialRoads || layers.majorLocalRoads || layers.minorLocalRoads || layers.pedestrianPaths);
 }
 
 export function isStreamingRoadVisible(
@@ -489,16 +493,20 @@ export function isStreamingRoadVisible(
   traceId?: string,
 ): boolean {
   const cls = String(roadClass ?? '').toLowerCase();
-  if (cls === 'arterial' || cls === 'major_local') return Boolean(layers.majorRoads);
+  if (cls === 'arterial') return Boolean(layers.arterialRoads);
+  if (cls === 'major_local') return Boolean(layers.majorLocalRoads);
   if (cls === 'pedestrian') return Boolean(layers.pedestrianPaths);
-  if (cls === 'minor_local' || cls === 'service') return Boolean(layers.localRoads);
+  if (cls === 'minor_local' || cls === 'service') return Boolean(layers.minorLocalRoads);
 
   const trace = String(traceId ?? '').toLowerCase();
   if (trace) {
-    if (trace.startsWith('major_local-trace-') || trace.startsWith('arterial-trace-') || trace.includes('major_local')) {
-      return Boolean(layers.majorRoads);
+    if (trace.startsWith('arterial-trace-') || trace.includes('arterial')) {
+      return Boolean(layers.arterialRoads);
     }
-    if (trace.startsWith('minor_local-trace-') || trace.includes('minor_local')) return Boolean(layers.localRoads);
+    if (trace.startsWith('major_local-trace-') || trace.includes('major_local')) {
+      return Boolean(layers.majorLocalRoads);
+    }
+    if (trace.startsWith('minor_local-trace-') || trace.includes('minor_local')) return Boolean(layers.minorLocalRoads);
     if (trace.includes('ped')) return Boolean(layers.pedestrianPaths);
   }
 

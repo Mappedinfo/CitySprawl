@@ -10,7 +10,7 @@ class StrictModel(BaseModel):
 
 
 class TerrainConfig(StrictModel):
-    noise_octaves: int = Field(default=2, ge=1, le=8)
+    noise_octaves: int = Field(default=5, ge=1, le=8)
     relief_strength: float = Field(default=0.12, gt=0.0, le=5.0)
 
 
