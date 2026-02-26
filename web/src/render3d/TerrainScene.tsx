@@ -10,7 +10,7 @@ type Props = {
   visible: boolean;
 };
 
-const TERRAIN_EXAGGERATION = 80;
+const TERRAIN_EXAGGERATION = 0;
 
 function classColor(cls: number, hillshade = 0.5): THREE.Color {
   let rgb: [number, number, number];
@@ -118,12 +118,12 @@ export function TerrainScene({ artifact, viewport, visible }: Props) {
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -4000, 8000);
     camera.up.set(0, 1, 0);
 
-    const ambient = new THREE.AmbientLight(0x93b9d1, 0.55);
+    const ambient = new THREE.AmbientLight(0x93b9d1, 0.85);
     scene.add(ambient);
-    const key = new THREE.DirectionalLight(0xc5edff, 0.8);
+    const key = new THREE.DirectionalLight(0xc5edff, 0.35);
     key.position.set(-0.4, 0.7, 1.4);
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0x5fbfe8, 0.28);
+    const fill = new THREE.DirectionalLight(0x5fbfe8, 0.15);
     fill.position.set(0.9, -0.2, 0.7);
     scene.add(fill);
 
@@ -196,9 +196,8 @@ export function TerrainScene({ artifact, viewport, visible }: Props) {
         camera.top = top;
         camera.bottom = bottom;
 
-        const zBase = 1200;
-        camera.position.set((left + right) * 0.5, (top + bottom) * 0.5, zBase);
-        camera.lookAt((left + right) * 0.5, (top + bottom) * 0.5, 0);
+        camera.position.set(0, 0, 1200);
+        camera.lookAt(0, 0, 0);
       } else {
         camera.left = -1;
         camera.right = 1;

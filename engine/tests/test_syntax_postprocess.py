@@ -24,7 +24,7 @@ def _edge(eid: str, u: str, v: str, road_class: str, width: float) -> BuiltRoadE
 
 def test_syntax_scores_compute_or_degrade_cleanly():
     nodes = [_node("a", 0, 0), _node("b", 1, 0), _node("c", 2, 0)]
-    edges = [_edge("ab", "a", "b", "arterial", 18.0), _edge("bc", "b", "c", "collector", 11.0)]
+    edges = [_edge("ab", "a", "b", "arterial", 18.0), _edge("bc", "b", "c", "major_local", 11.0)]
     scores, notes = compute_space_syntax_edge_scores(nodes, edges, choice_radius_hops=5)
     if scores:
         assert "bc" in scores or "ab" in scores
@@ -37,7 +37,7 @@ def test_syntax_postprocess_width_emphasis_and_optional_pruning():
     edges = [
         _edge("ab", "a", "b", "arterial", 18.0),
         _edge("bc", "b", "c", "arterial", 18.0),
-        _edge("bd", "b", "d", "collector", 11.0),
+        _edge("bd", "b", "d", "major_local", 11.0),
     ]
     out, notes, numeric = apply_syntax_postprocess(
         nodes,

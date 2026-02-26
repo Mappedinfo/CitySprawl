@@ -942,7 +942,7 @@ button:disabled {
   height: 100%;
 }
 
-.canvas-stage canvas {
+.canvas-stage > canvas {
   touch-action: none;
   z-index: 1;
 }

@@ -31,7 +31,7 @@ def _road_network_from_segments(segments: list[tuple[tuple[float, float], tuple[
                 id=f"e{idx}",
                 u=u,
                 v=v,
-                road_class="collector",
+                road_class="major_local",
                 weight=length,
                 length_m=length,
                 width_m=18.0,

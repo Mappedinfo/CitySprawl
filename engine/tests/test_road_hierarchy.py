@@ -45,11 +45,11 @@ def test_hierarchical_roads_emit_collector_and_dense_locals():
     )
     counts = Counter(e.road_class for e in artifact.roads.edges)
     assert counts["arterial"] > 0
-    assert counts["collector"] > 0
-    assert counts["local"] > 0
-    assert counts["collector"] + counts["local"] >= counts["arterial"] * 4
-    assert artifact.metrics.road_edge_count_by_class.get("collector", 0) == counts["collector"]
-    assert artifact.metrics.road_edge_count_by_class.get("local", 0) == counts["local"]
+    assert counts["major_local"] > 0
+    assert counts["minor_local"] > 0
+    assert counts["major_local"] + counts["minor_local"] >= counts["arterial"] * 4
+    assert artifact.metrics.road_edge_count_by_class.get("major_local", 0) == counts["major_local"]
+    assert artifact.metrics.road_edge_count_by_class.get("minor_local", 0) == counts["minor_local"]
     assert artifact.metrics.illegal_intersection_count <= max(artifact.metrics.road_edge_count * 2, 50)
     assert artifact.metrics.intersection_t_junction_count >= 1.0
     assert artifact.metrics.local_culdesac_edge_count_final > 0.0

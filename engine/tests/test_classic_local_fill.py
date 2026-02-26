@@ -34,7 +34,7 @@ def test_classic_local_fill_generates_curvy_locals_and_respects_setback():
             id="col0",
             u="h0",
             v="h1",
-            road_class="collector",
+            road_class="major_local",
             weight=1.0,
             length_m=220.0,
             river_crossings=0,
@@ -120,7 +120,7 @@ def test_classic_local_fill_emits_trace_length_stats_and_hits_target_band_on_lar
             id="col0",
             u="c0",
             v="c1",
-            road_class="collector",
+            road_class="major_local",
             weight=1.0,
             length_m=1760.0,
             river_crossings=0,
@@ -214,7 +214,7 @@ def test_classic_local_fill_ignores_hard_max_distance_stop_in_coverage_first_mod
             id="col0",
             u="c0",
             v="c1",
-            road_class="collector",
+            road_class="major_local",
             weight=1.0,
             length_m=1960.0,
             river_crossings=0,
@@ -271,7 +271,7 @@ def test_classic_local_fill_mainlines_continue_through_perpendicular_network_con
             id="col0",
             u="c0",
             v="c1",
-            road_class="collector",
+            road_class="major_local",
             weight=1.0,
             length_m=520.0,
             river_crossings=0,
@@ -368,7 +368,7 @@ def test_classic_local_fill_roots_local_traces_near_major_roads():
             id="col0",
             u="c0",
             v="c1",
-            road_class="collector",
+            road_class="major_local",
             weight=1.0,
             length_m=1000.0,
             river_crossings=0,
@@ -407,7 +407,7 @@ def test_classic_local_fill_roots_local_traces_near_major_roads():
         seed=31,
     )
 
-    major_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "collector"})
+    major_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "major_local"})
     assert len(traces) > 0
     assert numeric.get("local_classic_major_portal_seed_count", 0.0) > 0.0
     assert "local_classic_major_repel_eval_count" in numeric

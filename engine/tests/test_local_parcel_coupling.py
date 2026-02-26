@@ -8,10 +8,10 @@ def _road_network_with_local_cul() -> RoadNetwork:
     nodes = [
         RoadNodeRecord(id="n0", x=0.0, y=0.0, kind="arterial"),
         RoadNodeRecord(id="n1", x=200.0, y=0.0, kind="arterial"),
-        RoadNodeRecord(id="n2", x=100.0, y=0.0, kind="collector"),
-        RoadNodeRecord(id="n3", x=100.0, y=80.0, kind="collector"),
-        RoadNodeRecord(id="n4", x=120.0, y=120.0, kind="local"),
-        RoadNodeRecord(id="n5", x=150.0, y=145.0, kind="local"),
+        RoadNodeRecord(id="n2", x=100.0, y=0.0, kind="major_local"),
+        RoadNodeRecord(id="n3", x=100.0, y=80.0, kind="major_local"),
+        RoadNodeRecord(id="n4", x=120.0, y=120.0, kind="minor_local"),
+        RoadNodeRecord(id="n5", x=150.0, y=145.0, kind="minor_local"),
     ]
     edges = [
         RoadEdgeRecord(
@@ -30,7 +30,7 @@ def _road_network_with_local_cul() -> RoadNetwork:
             id="col0",
             u="n2",
             v="n3",
-            road_class="collector",
+            road_class="major_local",
             weight=1.0,
             length_m=80.0,
             river_crossings=0,
@@ -42,7 +42,7 @@ def _road_network_with_local_cul() -> RoadNetwork:
             id="loc-cul",
             u="n4",
             v="n5",
-            road_class="local",
+            road_class="minor_local",
             weight=1.0,
             length_m=45.0,
             river_crossings=0,

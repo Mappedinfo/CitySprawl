@@ -28,7 +28,7 @@ def test_local_edges_export_continuity_ids_and_segment_order():
         )
     )
 
-    local_edges = [e for e in artifact.roads.edges if e.road_class == "local"]
+    local_edges = [e for e in artifact.roads.edges if e.road_class == "minor_local"]
     assert local_edges
     assert all(e.continuity_id for e in local_edges)
     assert all(e.segment_order is not None for e in local_edges)

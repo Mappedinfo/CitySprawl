@@ -29,8 +29,18 @@ export type StreamEvent =
   | { event_type: 'stage_complete'; data: { stage_id: string } }
   | { event_type: 'terrain_milestone'; data: { stage: string; resolution?: number; extent_m?: number } }
   | { event_type: 'river_progress'; data: { river_id: string; centerline: Point2D[]; flow: number } }
-  | { event_type: 'road_phase_start'; data: { phase: 'arterial' | 'collector' | 'local' } }
-  | { event_type: 'road_phase_complete'; data: { phase: 'arterial' | 'collector' | 'local' } };
+  | { event_type: 'road_phase_start'; data: { phase: 'arterial' | 'major_local' | 'minor_local' } }
+  | { event_type: 'road_phase_complete'; data: { phase: 'arterial' | 'major_local' | 'minor_local' } }
+  | {
+      event_type: 'terrain_preview';
+      data: {
+        extent_m: number;
+        display_resolution: number;
+        heights: number[][];
+        terrain_class_preview: number[][];
+        hillshade_preview: number[][];
+      };
+    };
 
 // Incremental state for real-time rendering
 export type IncrementalState = {
@@ -40,6 +50,13 @@ export type IncrementalState = {
   partialTraces: Map<string, Point2D[]>;
   completedTraces: Array<{ trace_id: string; points: Point2D[]; road_class?: string; culdesac?: boolean }>;
   rivers: Array<{ river_id: string; centerline: Point2D[]; flow: number }>;
+  terrain: {
+    extent_m: number;
+    display_resolution: number;
+    heights: number[][];
+    terrain_class_preview: number[][];
+    hillshade_preview: number[][];
+  } | null;
 };
 
 export type StreamingProgress = {
@@ -58,6 +75,7 @@ function createEmptyState(): IncrementalState {
     partialTraces: new Map(),
     completedTraces: [],
     rivers: [],
+    terrain: null,
   };
 }
 
@@ -107,6 +125,10 @@ function mergeEvent(state: IncrementalState, event: StreamEvent): IncrementalSta
 
     case 'river_progress':
       next.rivers = [...state.rivers, { river_id: event.data.river_id, centerline: event.data.centerline, flow: event.data.flow }];
+      break;
+
+    case 'terrain_preview':
+      next.terrain = event.data;
       break;
 
     case 'progress':

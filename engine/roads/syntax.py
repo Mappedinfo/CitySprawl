@@ -56,7 +56,7 @@ def _collect_target_edges_for_scoring(
     *,
     target_classes: Optional[Set[str]] = None,
 ) -> list[object]:
-    target_set = set(str(c).lower() for c in target_classes) if target_classes else {"arterial", "collector"}
+    target_set = set(str(c).lower() for c in target_classes) if target_classes else {"arterial", "major_local"}
     out: list[object] = []
     for e in edges:
         rc = str(getattr(e, "road_class", "")).lower()
@@ -76,7 +76,7 @@ def _build_syntax_background_graph(nodes: Sequence[object], edges: Sequence[obje
     for n in nodes:
         g.add_node(str(getattr(n, "id")))
 
-    bg_classes = {"arterial", "collector", "local"}
+    bg_classes = {"arterial", "major_local", "minor_local"}
     for e in edges:
         rc = str(getattr(e, "road_class", "")).lower()
         if rc not in bg_classes:
@@ -190,7 +190,7 @@ def apply_width_guidance_postprocess(
         target_set = set(str(c).lower() for c in target_classes)
         notes.append(f"syntax_target_classes:{','.join(sorted(target_set))}")
     else:
-        target_set = {"arterial", "collector"}
+        target_set = {"arterial", "major_local"}
 
     scores, score_notes = compute_space_syntax_edge_scores(
         nodes, edges, choice_radius_hops=choice_radius_hops, target_classes=target_set,
@@ -208,7 +208,7 @@ def apply_width_guidance_postprocess(
     out = list(edges)
     for i, e in enumerate(out):
         rc = str(getattr(e, "road_class", "")).lower()
-        if rc != "collector":
+        if rc != "major_local":
             continue
         if rc not in target_set:
             continue

@@ -329,6 +329,34 @@ def _generate_core_context(
                 })
             except Exception:
                 pass
+    _emit_progress(progress_cb, "terrain_visuals", 0.22, "Computing terrain classification and contours")
+    terrain_visuals = compute_terrain_classification(
+        height=terrain_bundle.height,
+        slope=terrain_bundle.slope,
+        extent_m=config.extent_m,
+        river_polylines=selected_rivers_raw if selected_rivers_raw else terrain_bundle.hydrology.river_polylines,
+        max_resolution=128,
+    )
+    contour_lines = extract_contour_lines(
+        terrain_bundle.height,
+        extent_m=config.extent_m,
+        max_resolution=128,
+        contour_count=12,
+    )
+    if stream_cb:
+        try:
+            stream_cb({
+                "event_type": "terrain_preview",
+                "data": {
+                    "extent_m": float(config.extent_m),
+                    "display_resolution": int(terrain_visuals.height_preview.shape[0]),
+                    "heights": _grid_to_nested_list(terrain_visuals.height_preview, precision=4),
+                    "terrain_class_preview": _grid_to_nested_int_list(terrain_visuals.terrain_class_preview),
+                    "hillshade_preview": _grid_to_nested_list(terrain_visuals.hillshade_preview, precision=5),
+                },
+            })
+        except Exception:
+            pass
     _emit_progress(progress_cb, "hubs", 0.28, "Sampling hub centers")
 
     hub_result = generate_hubs(
@@ -458,21 +486,7 @@ def _generate_core_context(
         progress_cb=_road_progress_canonical if road_progress_cb is not None else None,
         stream_cb=stream_cb,
     )
-    _emit_progress(progress_cb, "artifact", 0.82, "Preparing terrain previews and contours")
-    terrain_visuals = compute_terrain_classification(
-        height=terrain_bundle.height,
-        slope=terrain_bundle.slope,
-        extent_m=config.extent_m,
-        river_polylines=selected_rivers_raw if selected_rivers_raw else terrain_bundle.hydrology.river_polylines,
-        max_resolution=128,
-    )
-    contour_lines = extract_contour_lines(
-        terrain_bundle.height,
-        extent_m=config.extent_m,
-        max_resolution=128,
-        contour_count=12,
-    )
-    _emit_progress(progress_cb, "artifact", 0.90, "Assigning place names")
+    _emit_progress(progress_cb, "artifact", 0.82, "Preparing artifact and place names")
 
     provider = get_toponymy_provider(config.naming.provider)
     road_edges_for_naming = [

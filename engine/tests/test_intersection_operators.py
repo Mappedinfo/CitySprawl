@@ -16,8 +16,8 @@ def _edge(eid: str, u: str, v: str, road_class: str, pts: list[Vec2]) -> BuiltRo
         weight=1.0,
         length_m=1.0,
         river_crossings=0,
-        width_m=11.0 if road_class == "collector" else 18.0,
-        render_order=1 if road_class == "collector" else 0,
+        width_m=11.0 if road_class == "major_local" else 18.0,
+        render_order=1 if road_class == "major_local" else 0,
         path_points=pts,
     )
 
@@ -31,7 +31,7 @@ def test_t_junction_operator_snaps_collector_and_splits_target():
     ]
     edges = [
         _edge("art", "a0", "a1", "arterial", [Vec2(0.0, 0.0), Vec2(10.0, 0.0)]),
-        _edge("col", "c0", "c1", "collector", [Vec2(5.0, 4.0), Vec2(5.0, 1.2)]),
+        _edge("col", "c0", "c1", "major_local", [Vec2(5.0, 4.0), Vec2(5.0, 1.2)]),
     ]
     nodes2, edges2, notes, numeric = apply_intersection_operators(
         nodes,
@@ -45,7 +45,7 @@ def test_t_junction_operator_snaps_collector_and_splits_target():
     assert len(edges2) >= 3  # arterial should be split
     assert numeric["intersection_t_junction_count"] >= 1.0
     assert any("t_junction" in n for n in notes)
-    collector = next(e for e in edges2 if str(e.road_class) == "collector")
+    collector = next(e for e in edges2 if str(e.road_class) == "major_local")
     assert collector.path_points is not None
     assert abs(float(collector.path_points[-1].y)) < 1e-6
 
@@ -91,7 +91,7 @@ def test_prune_short_dangles_keeps_marked_culdesac():
     ]
     edges = [
         _edge("art", "a0", "a1", "arterial", [Vec2(0.0, 0.0), Vec2(10.0, 0.0)]),
-        _edge("col-cul", "c0", "c1", "collector", [Vec2(5.0, 0.0), Vec2(5.0, 2.0)]),
+        _edge("col-cul", "c0", "c1", "major_local", [Vec2(5.0, 0.0), Vec2(5.0, 2.0)]),
     ]
     _, edges2, _, numeric = apply_intersection_operators(
         nodes,

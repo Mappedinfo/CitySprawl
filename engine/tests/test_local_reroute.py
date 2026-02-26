@@ -12,10 +12,10 @@ from engine.roads.local_reroute import (
 
 def test_select_local_reroute_candidates_selective_prioritizes_connectors_and_spines():
     items = [
-        {"road_class": "local", "length_m": 40.0, "flags": set(), "meta": {"is_spine_candidate": False, "connected_to_collector": False}},
-        {"road_class": "local", "length_m": 120.0, "flags": set(), "meta": {"is_spine_candidate": False, "connected_to_collector": False}},
-        {"road_class": "local", "length_m": 55.0, "flags": set(), "meta": {"is_spine_candidate": True, "connected_to_collector": False}},
-        {"road_class": "local", "length_m": 50.0, "flags": set(), "meta": {"is_spine_candidate": False, "connected_to_collector": True}},
+        {"road_class": "minor_local", "length_m": 40.0, "flags": set(), "meta": {"is_spine_candidate": False, "connected_to_collector": False}},
+        {"road_class": "minor_local", "length_m": 120.0, "flags": set(), "meta": {"is_spine_candidate": False, "connected_to_collector": False}},
+        {"road_class": "minor_local", "length_m": 55.0, "flags": set(), "meta": {"is_spine_candidate": True, "connected_to_collector": False}},
+        {"road_class": "minor_local", "length_m": 50.0, "flags": set(), "meta": {"is_spine_candidate": False, "connected_to_collector": True}},
     ]
     idxs = select_local_reroute_candidates(
         items,

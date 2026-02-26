@@ -1,10 +1,11 @@
 import type { CityArtifact, HubRecord } from '../types/city';
 
 export function MetricsPanel({ artifact, selectedHub }: { artifact: CityArtifact | null; selectedHub: HubRecord | null }) {
+  const hasMetrics = artifact && typeof artifact.metrics.connectivity_ratio === 'number';
   return (
     <aside className="panel metrics-panel">
       <h2>Metrics</h2>
-      {!artifact ? (
+      {!hasMetrics ? (
         <p className="muted">No artifact yet.</p>
       ) : (
         <div className="metrics-list">

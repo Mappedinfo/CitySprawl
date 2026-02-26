@@ -47,7 +47,7 @@ def test_local_roads_prioritize_coverage_on_10km_extent():
     metrics = artifact.metrics
 
     assert artifact.terrain.extent_m == 10000.0
-    assert counts["local"] > 0
+    assert counts["minor_local"] > 0
     assert metrics.local_reroute_applied_count >= 1
     assert metrics.local_two_point_edge_ratio < 0.95
     assert metrics.local_buildable_area_m2 is not None

@@ -37,7 +37,7 @@ class StreetRun:
     """Represents a semantically continuous street segment composed of multiple edges."""
     id: str
     edge_ids: List[str]  # ordered list of edge IDs forming this run
-    road_class: str  # dominant road_class (e.g., "local", "collector")
+    road_class: str  # dominant road_class (e.g., "minor_local", "major_local")
     flags: FrozenSet[str]  # aggregated flags (e.g., {"local_spine_run"})
     length_m: float  # total length of all edges
     node_ids: List[str]  # ordered list of node IDs (including start/end)
@@ -171,7 +171,7 @@ def _continuation_score(
     def _max_deflection_for_class(rc: str) -> float:
         if rc == "arterial":
             return config.max_deflection_deg_arterial
-        elif rc == "collector":
+        elif rc == "major_local":
             return config.max_deflection_deg_collector
         elif "local_spine" in flags_a or "local_spine" in flags_b:
             return config.max_deflection_deg_spine
@@ -264,7 +264,7 @@ def _build_continuation_candidates(
             if tangent_a is None:
                 continue
             
-            class_a = str(getattr(edge_a, "road_class", "local"))
+            class_a = str(getattr(edge_a, "road_class", "minor_local"))
             width_a = float(getattr(edge_a, "width_m", 8.0))
             flags_a = frozenset(getattr(edge_a, "flags", frozenset()))
             
@@ -282,7 +282,7 @@ def _build_continuation_candidates(
                 if tangent_b is None:
                     continue
                 
-                class_b = str(getattr(edge_b, "road_class", "local"))
+                class_b = str(getattr(edge_b, "road_class", "minor_local"))
                 width_b = float(getattr(edge_b, "width_m", 8.0))
                 flags_b = frozenset(getattr(edge_b, "flags", frozenset()))
                 
@@ -481,7 +481,7 @@ def _build_street_run(
         length = float(getattr(edge, "length_m", 0.0))
         total_length += length
         
-        road_class = str(getattr(edge, "road_class", "local"))
+        road_class = str(getattr(edge, "road_class", "minor_local"))
         road_classes[road_class] = road_classes.get(road_class, 0.0) + length
         
         flags = getattr(edge, "flags", frozenset())
@@ -546,7 +546,7 @@ def _build_street_run(
                 deflections.append(defl)
     
     # Dominant road class
-    dominant_class = "local"
+    dominant_class = "minor_local"
     if road_classes:
         dominant_class = max(road_classes.keys(), key=lambda k: road_classes[k])
     
@@ -731,7 +731,7 @@ def road_class_street_run_metrics(street_runs: List[StreetRun]) -> Dict[str, flo
     """
     metrics: Dict[str, float] = {}
     
-    for road_class in ["arterial", "collector", "local"]:
+    for road_class in ["arterial", "major_local", "minor_local"]:
         class_runs = [r for r in street_runs if r.road_class == road_class]
         
         if not class_runs:

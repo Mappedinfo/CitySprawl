@@ -13,7 +13,7 @@ def test_routed_roads_emit_polyline_paths_and_not_shorter_than_chord():
     node_map = {n.id: n for n in artifact.roads.nodes}
     checked = 0
     for edge in artifact.roads.edges:
-        if edge.road_class not in ("arterial", "local"):
+        if edge.road_class not in ("arterial", "minor_local"):
             continue
         if not edge.path_points or len(edge.path_points) < 2:
             continue

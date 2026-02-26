@@ -7,14 +7,14 @@ ARTERIAL_WIDTH_M = 18.0
 
 ROAD_RENDER_ORDER = {
     'arterial': 0,
-    'collector': 1,
-    'local': 2,
+    'major_local': 1,
+    'minor_local': 2,
     'pedestrian': 3,
 }
 
 ROAD_WIDTH_PRESET = {
     'arterial': ARTERIAL_WIDTH_M,
-    'collector': COLLECTOR_WIDTH_M,
-    'local': LOCAL_WIDTH_M,
+    'major_local': COLLECTOR_WIDTH_M,
+    'minor_local': LOCAL_WIDTH_M,
     'pedestrian': PEDESTRIAN_WIDTH_M,
 }

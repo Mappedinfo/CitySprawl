@@ -265,7 +265,7 @@ def select_local_reroute_candidates(
             road_class = str(item.get("road_class", ""))
         else:
             road_class = str(getattr(item, "road_class", ""))
-        if road_class and road_class != "local":
+        if road_class and road_class != "minor_local":
             continue
         flags = set(item.get("flags", set()) or set()) if isinstance(item, dict) else set(getattr(item, "flags", set()) or set())
         length_m = float(item.get("length_m", 0.0)) if isinstance(item, dict) else float(getattr(item, "length_m", 0.0))

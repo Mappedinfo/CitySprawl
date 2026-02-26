@@ -35,7 +35,7 @@ def _road_unions(road_network: RoadNetwork):
     from shapely.geometry import LineString
     local_cul_endpoints = []
     for e in road_network.edges:
-        if e.road_class not in ('arterial', 'collector', 'local'):
+        if e.road_class not in ('arterial', 'major_local', 'minor_local'):
             continue
         coords = _edge_coords(e, node_lookup)
         if coords is None:
@@ -43,7 +43,7 @@ def _road_unions(road_network: RoadNetwork):
         buf = LineString(coords).buffer(float(getattr(e, 'width_m', 8.0)) / 2.0, cap_style=2, join_style=2)
         if e.road_class == 'arterial':
             arterial.append(buf)
-        elif e.road_class == 'collector':
+        elif e.road_class == 'major_local':
             collector.append(buf)
         else:
             local.append(buf)

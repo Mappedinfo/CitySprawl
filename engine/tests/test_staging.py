@@ -46,4 +46,4 @@ def test_generate_city_staged_returns_twelve_ordered_stages_with_required_layers
     assert final_stage.layers.land_blocks is not None
     assert final_stage.layers.parcel_lots is not None
     assert final_stage.layers.visual_envelope is not None
-    assert any(edge.path_points for edge in resp.final_artifact.roads.edges if edge.road_class in ("arterial", "local"))
+    assert any(edge.path_points for edge in resp.final_artifact.roads.edges if edge.road_class in ("arterial", "minor_local"))

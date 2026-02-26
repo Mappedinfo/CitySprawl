@@ -426,7 +426,7 @@ class ClassicRoadGenerator:
         self.forbidden_geom = _build_forbidden_geom(getattr(probe, "river_union", None), float(cfg.river_setback_m))
         self.stream_cb = stream_cb
 
-        self.base_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "collector", "local"})
+        self.base_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "major_local", "minor_local"})
         self.arterial_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial"})
         self.runtime_segments: list[Segment] = []
         self.queue: list[_QueueState] = []
@@ -631,7 +631,7 @@ class ClassicRoadGenerator:
             if slope_deg > float(self.cfg.slope_serpentine_threshold_deg):
                 d = self.probe.choose_serpentine_direction(cur, prev_dir, step_m, rng=self.rng)
             else:
-                d = self.probe.adjust_direction_for_slope(cur, prev_dir, road_class="collector")
+                d = self.probe.adjust_direction_for_slope(cur, prev_dir, road_class="major_local")
 
             # Classical local heuristics: river parallel bias + arterial alignment + weak hub seek.
             river_tan, river_dist = self.probe.nearest_river_bank_tangent(cur)
@@ -757,10 +757,10 @@ class ClassicRoadGenerator:
             _emit_stream_event(self.stream_cb, {
                 "event_type": "road_trace_progress",
                 "data": {
-                    "trace_id": f"collector-trace-{self.trace_count}",
+                    "trace_id": f"major_local-trace-{self.trace_count}",
                     "points": [{"x": p.x, "y": p.y} for p in points],
                     "complete": False,
-                    "road_class": "collector",
+                    "road_class": "major_local",
                 },
             })
 
@@ -860,10 +860,10 @@ class ClassicRoadGenerator:
             _emit_stream_event(self.stream_cb, {
                 "event_type": "road_trace_progress",
                 "data": {
-                    "trace_id": f"collector-trace-{self.trace_count}",
+                    "trace_id": f"major_local-trace-{self.trace_count}",
                     "points": [{"x": p.x, "y": p.y} for p in tr.points],
                     "complete": True,
-                    "road_class": "collector",
+                    "road_class": "major_local",
                     "culdesac": tr.culdesac,
                 },
             })

@@ -428,10 +428,10 @@ def generate_classic_local_fill(
             river_setback_m=float(cfg.river_setback_m),
         ),
     )
-    base_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "collector", "local"})
-    collector_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"collector"})
+    base_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "major_local", "minor_local"})
+    collector_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"major_local"})
     arterial_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial"})
-    existing_local_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"local"})
+    existing_local_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"minor_local"})
     higher_order_segments = list(arterial_segments) + list(collector_segments)
     runtime_segments: list[Segment] = []
 
@@ -466,7 +466,7 @@ def generate_classic_local_fill(
     }
     existing_local_endpoints: list[tuple[Vec2, Optional[str]]] = []
     for edge in edges:
-        if str(getattr(edge, "road_class", "")).lower() != "local":
+        if str(getattr(edge, "road_class", "")).lower() != "minor_local":
             continue
         edge_pts = _iter_polyline_points(edge, node_lookup)
         if len(edge_pts) >= 2:
@@ -506,7 +506,7 @@ def generate_classic_local_fill(
     # local roads branch from the major network instead of spawning from block edges.
     for edge in edges:
         rc = str(getattr(edge, "road_class", "")).lower()
-        if rc not in {"arterial", "collector"}:
+        if rc not in {"arterial", "major_local"}:
             continue
         pts = _iter_polyline_points(edge, node_lookup)
         if len(pts) < 2:
@@ -741,7 +741,7 @@ def generate_classic_local_fill(
                 continue
 
         trace_stream_attempt_seq += 1
-        trace_stream_id = f"local-trace-{int(st.block_idx)}-{trace_stream_attempt_seq}"
+        trace_stream_id = f"minor_local-trace-{int(st.block_idx)}-{trace_stream_attempt_seq}"
         pts = [st.pos]
         prev_dir = st.direction.normalized()
         total_len = 0.0
@@ -815,7 +815,7 @@ def generate_classic_local_fill(
             if slope_deg > float(cfg.slope_serpentine_threshold_deg):
                 d = probe.choose_serpentine_direction(cur, prev_dir, step_m, rng=rng)
             else:
-                d = probe.adjust_direction_for_slope(cur, prev_dir, road_class="local")
+                d = probe.adjust_direction_for_slope(cur, prev_dir, road_class="minor_local")
 
             tan_col, d_col = _nearest_segment_tangent(cur, collector_segments)
             if tan_col is not None and d_col < 120.0:
@@ -1107,7 +1107,7 @@ def generate_classic_local_fill(
                         "trace_id": trace_stream_id,
                         "points": [{"x": p.x, "y": p.y} for p in pts],
                         "complete": False,
-                        "road_class": "local",
+                        "road_class": "minor_local",
                         "culdesac": False,
                     },
                 })
@@ -1240,7 +1240,7 @@ def generate_classic_local_fill(
                 "trace_id": trace_stream_id,
                 "points": [{"x": p.x, "y": p.y} for p in pts],
                 "complete": True,
-                "road_class": "local",
+                "road_class": "minor_local",
                 "culdesac": bool(cul),
             },
         })

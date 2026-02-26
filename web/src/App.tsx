@@ -332,7 +332,33 @@ export default function App() {
     });
   }, [isStreaming, streaming.progress]);
 
-  const artifact: CityArtifact | null = response?.final_artifact ?? null;
+  const artifact: CityArtifact | null = useMemo(() => {
+    if (response?.final_artifact) return response.final_artifact;
+    const t = streaming.state.terrain;
+    if (!t) return null;
+    // Build a minimal artifact from streaming terrain data so TerrainScene can render early.
+    return {
+      meta: { schema_version: '', seed: 0, duration_ms: 0, generated_at_utc: '', config: config },
+      terrain: {
+        extent_m: t.extent_m,
+        resolution: config.grid_resolution,
+        display_resolution: t.display_resolution,
+        heights: t.heights,
+        slope_preview: null,
+        terrain_class_preview: t.terrain_class_preview,
+        hillshade_preview: t.hillshade_preview,
+        contours: [],
+      },
+      rivers: [],
+      river_areas: [],
+      visual_envelope: null,
+      hubs: [],
+      roads: { nodes: [], edges: [] },
+      pedestrian_paths: [],
+      metrics: {} as CityArtifact['metrics'],
+      debug_layers: { candidate_edges: [] },
+    } as CityArtifact;
+  }, [response?.final_artifact, streaming.state.terrain, config]);
   const stages: StageArtifact[] = useMemo(() => normalizeStagesForUi(response?.stages ?? []), [response?.stages]);
   const hasStages = stages.length > 0;
 

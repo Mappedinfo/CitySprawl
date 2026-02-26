@@ -44,7 +44,7 @@ def test_terrain_probe_contour_bias_on_steep_slope():
     probe = _make_probe()
     p = Vec2(120.0, 240.0)
     current = Vec2(1.0, 0.0)
-    out = probe.adjust_direction_for_slope(p, current, road_class="collector")
+    out = probe.adjust_direction_for_slope(p, current, road_class="major_local")
     contour = probe.sample_contour_dir(p)
     grad = probe.sample_gradient_dir(p)
     assert probe.sample_slope_deg(p) > 15.0

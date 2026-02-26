@@ -204,7 +204,7 @@ def snap_endpoints_to_nodes(
         anchors.append((str(getattr(n, "id")), Vec2(float(pos.x), float(pos.y)), str(getattr(n, "kind", ""))))
 
     for ei, edge in enumerate(edges):
-        if str(getattr(edge, "road_class", "")) not in ("collector", "local"):
+        if str(getattr(edge, "road_class", "")) not in ("major_local", "minor_local"):
             continue
         path = _edge_points(edge, node_lookup)
         if len(path) < 2:
@@ -218,7 +218,7 @@ def snap_endpoints_to_nodes(
                 anchors,
                 key=lambda item: (
                     p.distance_to(item[1]),
-                    {"arterial": 0, "hub": 0, "collector": 1, "local": 2}.get(item[2], 3),
+                    {"arterial": 0, "hub": 0, "major_local": 1, "minor_local": 2}.get(item[2], 3),
                 ),
             )
             for target_id, target_pos, _ in candidates:
@@ -336,7 +336,7 @@ def snap_endpoints_to_segments_create_t_junctions(
     split_targets = 0
 
     for ei, edge in enumerate(list(edges)):
-        if str(getattr(edge, "road_class", "")) not in ("collector", "local"):
+        if str(getattr(edge, "road_class", "")) not in ("major_local", "minor_local"):
             continue
         path = _edge_points(edge, node_lookup)
         if len(path) < 2:
@@ -356,7 +356,7 @@ def snap_endpoints_to_segments_create_t_junctions(
                 if dist > t_radius_m:
                     continue
                 # Prefer arterial/collector targets
-                prio = 0 if str(getattr(target, "road_class", "")) in ("arterial", "collector") else 1
+                prio = 0 if str(getattr(target, "road_class", "")) in ("arterial", "major_local") else 1
                 if best is None or (prio, dist, along) < (best[0], best[1], best[4]):
                     best = (prio, dist, target, proj, along, target_path, seg_idx)
             if best is None:
@@ -411,7 +411,7 @@ def split_crossings(
 
     for edge in edges:
         rc = str(getattr(edge, "road_class", ""))
-        if rc not in ("arterial", "collector", "local"):
+        if rc not in ("arterial", "major_local", "minor_local"):
             continue
         pts = _edge_points(edge, node_lookup)
         segs = _segmentize_polyline(pts)
@@ -506,7 +506,7 @@ def prune_short_dangles(
             # cul-de-sacs can be as short as 25m, don't prune them
             # using the same aggressive threshold as collectors.
             rc = str(getattr(e, "road_class", ""))
-            if rc == "local" and length >= 25.0:
+            if rc == "minor_local" and length >= 25.0:
                 kept.append(e)
                 continue
             pruned += 1
@@ -535,8 +535,8 @@ def apply_intersection_operators(
         split_tolerance_m: Tolerance for splitting edges.
         min_dangle_length_m: Minimum length for dangling edges.
         target_classes: Optional set of road classes to process. If None, processes
-            all classes (backward compatible). Use {'arterial', 'collector'} for
-            Major-only processing, or {'local'} for Local-only processing.
+            all classes (backward compatible). Use {'arterial', 'major_local'} for
+            Major-only processing, or {'minor_local'} for Local-only processing.
     
     Returns:
         Tuple of (nodes, edges, notes, numeric).

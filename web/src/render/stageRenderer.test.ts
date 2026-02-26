@@ -23,15 +23,15 @@ const allOn: LayerToggles = {
 describe('isStreamingRoadVisible', () => {
   it('filters major/local/ped classes by corresponding layer toggles', () => {
     expect(isStreamingRoadVisible({ ...allOn, majorRoads: false }, 'arterial')).toBe(false);
-    expect(isStreamingRoadVisible({ ...allOn, majorRoads: false }, 'collector')).toBe(false);
-    expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, 'local')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, majorRoads: false }, 'major_local')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, 'minor_local')).toBe(false);
     expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, 'service')).toBe(false);
     expect(isStreamingRoadVisible({ ...allOn, pedestrianPaths: false }, 'pedestrian')).toBe(false);
   });
 
   it('falls back to trace id hints for partial traces', () => {
-    expect(isStreamingRoadVisible({ ...allOn, majorRoads: false }, undefined, 'collector-trace-1')).toBe(false);
-    expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, undefined, 'local-trace-2')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, majorRoads: false }, undefined, 'major_local-trace-1')).toBe(false);
+    expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, undefined, 'minor_local-trace-2')).toBe(false);
     expect(isStreamingRoadVisible({ ...allOn, localRoads: false }, undefined, 'unknown-trace')).toBe(true);
   });
 

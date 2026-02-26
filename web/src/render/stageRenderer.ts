@@ -372,6 +372,7 @@ export function drawStageScene({
       showMajorRoads: layers.majorRoads,
       showLocalRoads: layers.localRoads,
       showPedestrianRoads: layers.pedestrianPaths,
+      transparentBackground,
       cssWidth,
       cssHeight,
     });
@@ -488,16 +489,16 @@ export function isStreamingRoadVisible(
   traceId?: string,
 ): boolean {
   const cls = String(roadClass ?? '').toLowerCase();
-  if (cls === 'arterial' || cls === 'collector') return Boolean(layers.majorRoads);
+  if (cls === 'arterial' || cls === 'major_local') return Boolean(layers.majorRoads);
   if (cls === 'pedestrian') return Boolean(layers.pedestrianPaths);
-  if (cls === 'local' || cls === 'service') return Boolean(layers.localRoads);
+  if (cls === 'minor_local' || cls === 'service') return Boolean(layers.localRoads);
 
   const trace = String(traceId ?? '').toLowerCase();
   if (trace) {
-    if (trace.startsWith('collector-trace-') || trace.startsWith('arterial-trace-') || trace.includes('collector')) {
+    if (trace.startsWith('major_local-trace-') || trace.startsWith('arterial-trace-') || trace.includes('major_local')) {
       return Boolean(layers.majorRoads);
     }
-    if (trace.startsWith('local-trace-') || trace.includes('local')) return Boolean(layers.localRoads);
+    if (trace.startsWith('minor_local-trace-') || trace.includes('minor_local')) return Boolean(layers.localRoads);
     if (trace.includes('ped')) return Boolean(layers.pedestrianPaths);
   }
 
@@ -529,10 +530,10 @@ export function drawStreamingTraces(
     if (trace.road_class === 'arterial') {
       ctx.strokeStyle = 'rgba(255, 200, 120, 0.9)';
       ctx.lineWidth = 3;
-    } else if (trace.road_class === 'collector') {
+    } else if (trace.road_class === 'major_local') {
       ctx.strokeStyle = 'rgba(200, 220, 255, 0.85)';
       ctx.lineWidth = 2;
-    } else if (trace.road_class === 'local') {
+    } else if (trace.road_class === 'minor_local') {
       ctx.strokeStyle = 'rgba(120, 255, 180, 0.7)';
       ctx.lineWidth = 1.2;
     } else {
@@ -567,10 +568,10 @@ export function drawStreamingTraces(
       if (edge.roadClass === 'arterial') {
         ctx.strokeStyle = 'rgba(236, 246, 255, 0.88)';
         ctx.lineWidth = 2.8;
-      } else if (edge.roadClass === 'collector') {
+      } else if (edge.roadClass === 'major_local') {
         ctx.strokeStyle = 'rgba(194, 238, 255, 0.72)';
         ctx.lineWidth = 1.8;
-      } else if (edge.roadClass === 'local') {
+      } else if (edge.roadClass === 'minor_local') {
         ctx.strokeStyle = 'rgba(136, 214, 245, 0.45)';
         ctx.lineWidth = 1.1;
       } else {
@@ -592,7 +593,7 @@ export function drawStreamingTraces(
     if (points.length < 2) continue;
     if (!isStreamingRoadVisible(layers, undefined, traceId)) continue;
 
-    const isCollector = traceId.startsWith('collector-trace-');
+    const isCollector = traceId.startsWith('major_local-trace-');
     ctx.strokeStyle = isCollector
       ? 'rgba(100, 220, 255, 0.95)'
       : 'rgba(255, 220, 100, 0.95)';

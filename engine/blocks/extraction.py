@@ -71,7 +71,7 @@ def vehicular_corridor_union(road_network: RoadNetwork):
     node_lookup = {n.id: n for n in road_network.nodes}
     geoms = []
     for edge in road_network.edges:
-        if edge.road_class not in ("arterial", "collector", "local"):
+        if edge.road_class not in ("arterial", "major_local", "minor_local"):
             continue
         coords = _edge_coords(edge, node_lookup)
         if coords is None:
@@ -248,7 +248,7 @@ def _road_centerline_linework(road_network: RoadNetwork) -> List[LineString]:
     node_lookup = {n.id: n for n in road_network.nodes}
     lines: List[LineString] = []
     for edge in road_network.edges:
-        if edge.road_class not in ("arterial", "collector", "local"):
+        if edge.road_class not in ("arterial", "major_local", "minor_local"):
             continue
         coords = _edge_coords(edge, node_lookup)
         if coords is None or len(coords) < 2:
