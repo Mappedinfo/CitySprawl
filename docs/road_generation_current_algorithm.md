@@ -322,38 +322,43 @@ Local 不是全图生成，而是 **block 内部填充**：
 - 强制道路保持在 block 内（不允许轻易越界）
 - 借助 collector/arterial 的切向信息塑形
 
-#### 6.3.2 Seed 策略（当前实现是边界法优先）
+#### 6.3.2 Seed 策略（当前实现：major portal 优先 + centroid fallback）
 
-当前 local seed 与早期版本不同，优先使用 block 外边界播种：
+当前实现的 local seed **不是边界播种优先**。默认优先从冻结后的 major network（`arterial + collector`）上生成 portal seeds：
 
-- 沿 block 外边界按 `local_spacing_m` 放置 seeds
-- 使用边界段法向量，选择朝 block 内部的法线作为初始方向
-- 每个 seed 生成一个 `_State`
+- 沿 major polyline 按区间采样（目标间距由 `local_major_seed_spacing_*` 控制）
+- 在 road 切线两侧取法线方向，向 block 内部 inset 形成 portal seed
+- 用 block 内部可用前向净空（clearance）筛选 portal，避免把 seed 放在无空间方向
+- 每个 portal seed 生成一个 `_State(depth=0, branch_role=mainline)`
 
-Fallback（异常时）：
+Fallback（没有 major 接触的 residual/coverage 补线 polygon）：
 
 - 使用 block centroid / representative point / MRR 边上点
+- 仍以“向 block 内部生长”为原则，不回退到边界法播种
 
-这让 local 更容易形成“从边界向内部穿入”的网格或 T 型连接。
+这保证 local 在主路径中视觉上和拓扑上都是“从 major network 向街区内部扩展”。
 
-#### 6.3.3 Trace 长度目标（语义层，非最终 edge）
+#### 6.3.3 Trace 长度目标（语义层，非最终 edge；当前默认已升级）
 
-当前实现已加入 “semantic local trace” 的软目标框架（仅作用于 `classic_local_fill` trace，不是最终拓扑拆分后的 edge）：
+当前 local 长度控制作用在 `classic_local_fill` 的 **trace continuity**（不是最终 topology split 后的 edge）：
 
-- 目标区间：`500m–1000m`
-- 软上限：`1200m`
-- 小 block 例外（长轴不足阈值时，不强推长 trace）
+- 长主线（mainline）目标区间：约 `1200m–4800m`
+- 软上限：约 `5600m`
+- 硬上限：默认 `6000m`（复用 `local_classic_max_trace_len_m` 语义）
+- `sub_local_connector`（连接导向分支）使用更短长度 cap（默认约 `<=1800m`）
+- `fill_branch`（格点填充分支）保持更短/中等长度策略
+- 小 block 仍可按长轴阈值走例外路径（不强推长 trace）
 
-实现方式：
+实现方式（当前）：
 
 - 为每个 block 计算动态 `trace_len_cap` 与 `endpoint_span_cap`
-- 针对大 block 开启 trace target
-- 输出对应统计指标（见 9 节）
+- 针对大 block 开启 trace target，同时 mainline 受 6km hard cap 保护
+- 输出 trace 级长度统计与长主线统计指标（见 9 节）
 
 注意：
 
-- 这是“软目标 + 例外”，不是硬约束
-- 最终 edge 会因为交叉口拆分、拓扑修复、语法裁剪变短
+- `500m–1000m` 指标仍保留，但更偏“历史兼容/过渡指标”
+- 最终 edge 会因为交叉口拆分、拓扑修复、语法裁剪变短（trace 连续性 != 最终单条 edge 长度）
 
 #### 6.3.4 单条 local trace 生长（block 内）
 
@@ -372,18 +377,26 @@ Fallback（异常时）：
 
 #### 6.3.5 Branching（局部支路）
 
-当前 local branching 是“基于累计距离的格点式触发”，不是每步随机触发：
+当前 local branching 是两层机制并行：
 
-- 每跨过一个 `local_spacing_m` 网格区间时评估一次分支
-- 分支角度接近正交（约 88°–92°）
-- 40% 概率做 cross（双侧），60% 做 T（单侧）
-- 概率受：
+1. **主线 sub Local 连接分支（根干线优先）**
+   - 对 root/shallow `mainline` 增加里程调度器
+   - 每 `200–400m`（默认）触发一次左右分支尝试
+   - 分支 role = `sub_local_connector`
+   - 目的不是单纯加密，而是优先连接其他 local traces（local-local connectivity）
+
+2. **格点式 fill branching（保留）**
+   - 基于累计距离跨过 `local_spacing_m` 网格区间时评估分支
+   - 作为 `fill_branch` 的形态填充机制，不替代 sub Local 连接分支
+
+- 分支角度仍以正交为主（约 88°–92°）
+- 格点分支概率受：
   - 坡度
   - 深度衰减
   - 距离高阶道路远近
 影响
 
-这比纯随机分支更容易形成规整可读的 local 交叉格局。
+这比纯随机分支更容易形成规整可读的 local 交叉格局，同时通过 sub Local 机制提升 local-local 连通。
 
 #### 6.3.6 停止条件（local）
 
@@ -404,6 +417,8 @@ Fallback（异常时）：
 
 - `span_cap` 用于约束端点跨度（防止过度拉长）
 - `noodle_curve` 用于防止低跨度高长度的“面条曲线”
+- `reached_trace_cap` 会单独记录 trace 是否触达 hard cap（默认 6km）
+- 若触达 hard cap 且仍未与其他 Local Roads 建立连接，会标记为 `overlimit_unconnected` 候选，供 `network.py` 后处理端点连桥使用
 
 #### 6.3.7 接受准则与 trace 元信息
 
@@ -413,8 +428,14 @@ Fallback（异常时）：
 - `is_spine_candidate`
 - `connected_to_collector`
 - `culdesac`
+- `branch_role`（`mainline` / `sub_local_connector` / `fill_branch`）
+- `trace_len_m`
+- `local_touch_count`
+- `reached_trace_cap`
+- `terminal_stop_reason`
+- `is_overlimit_unconnected_candidate`
 
-这些元信息随后用于 local geometry reroute 的候选选择。
+这些元信息随后用于 local geometry reroute 候选选择，以及 `network.py` 的 local endpoint bridge 后处理筛选。
 
 ### 6.4 Local `grid_clip` 回退与补线（supplement）
 
@@ -468,6 +489,16 @@ local topology（节点连接关系）来自 classic/grid clip trace，但几何
 输出 flag 示例：
 
 - `local_candidate_reroute`
+- `local_rerouted`
+- `local_reroute_rejected_*`
+
+补充（当前实现新增）：
+
+- 在 local reroute 完成后、append local edges 前，`network.py` 会对 `pending_local_entries` 做一轮 **endpoint bridge** 后处理：
+  - 只针对触达 trace hard cap 且未连接到其他 local 的候选
+  - 从全局 local endpoints 池中配对（不按 major-defined block 硬限制）
+  - 使用 local A* 路由生成 `local_endpoint_bridge`
+  - 成功后作为普通 local pending entry 进入统一 append / intersections 流程
 - `local_rerouted`
 - `local_reroute_rejected`
 - `local_reroute_rejected_noodle`
@@ -652,7 +683,7 @@ Local trace 统计（语义 trace 层）：
 - 更符合生成算法语义
 - 不与后续交叉口切分/语法裁剪冲突
 
-但最终可视化看到的 `local edge` 仍可能显著短于 trace。
+但最终可视化看到的 `local edge` 仍可能显著短于 trace（例如 `_append_polyline_edge(...)` 会对长且曲折的 local polyline 做切段保护）。
 
 ## 12. 调试与排障建议（按当前架构）
 
@@ -679,10 +710,9 @@ Local trace 统计（语义 trace 层）：
 
 - 城市规划意义上的最优道路生成
 - 平面图严格约束下的全局拓扑最优
-- 参数调整后一定达到目标形态（例如 local trace 500–1000m 目前仍是软目标）
+- 参数调整后一定达到目标形态（例如 local trace 的 500–1000m 指标现在主要是历史兼容指标，当前默认设计更偏长主线 + 6km trace continuity）
 
 如果需要进一步演进，建议将下一版文档拆成两份：
 
 - `当前实现说明`（本文件）
 - `目标算法设计文档`（面向重构）
-

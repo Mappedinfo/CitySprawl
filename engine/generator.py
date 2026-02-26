@@ -636,8 +636,17 @@ def _build_city_artifact_from_core(
             metric_notes.append(
                 f"Classic local trace length (m): p50={int(round(trace_p50))}, p90={int(round(trace_p90))}, p99={int(round(trace_p99))}"
             )
+            local_trace_cap = float(metric_values.get("local_classic_long_trace_cap_m", 0.0))
+            if local_trace_cap > 0.0:
+                metric_notes.append(f"Classic local trace cap: {int(round(local_trace_cap))}m (trace continuity)")
             metric_notes.append(
-                "Classic local trace target band (500-1000m): "
+                "Classic local trace long-length rates: "
+                f">1km={float(metric_values.get('local_classic_trace_over_1km_rate', 0.0)):.2f}, "
+                f">3km={float(metric_values.get('local_classic_trace_over_3km_rate', 0.0)):.2f}, "
+                f"reached_6km={int(metric_values.get('local_classic_trace_over_6km_count', 0.0))}"
+            )
+            metric_notes.append(
+                "Classic local trace target band (500-1000m, historical compatibility): "
                 f"{float(metric_values.get('local_classic_trace_target_band_rate', 0.0)):.2f} "
                 f"(short={float(metric_values.get('local_classic_trace_short_rate', 0.0)):.2f}, "
                 f"long={float(metric_values.get('local_classic_trace_long_rate', 0.0)):.2f})"
@@ -645,6 +654,15 @@ def _build_city_artifact_from_core(
             nonexc_band = float(metric_values.get("local_classic_trace_nonexception_target_band_rate", 0.0))
             if nonexc_band > 0.0:
                 metric_notes.append(f"Classic local trace non-exception target band rate: {nonexc_band:.2f}")
+        sub_branch_triggers = int(metric_values.get("local_classic_sub_branch_trigger_count", 0.0))
+        if sub_branch_triggers > 0:
+            metric_notes.append(
+                "Classic local sub-branches (200-400m): "
+                f"triggers={sub_branch_triggers}, "
+                f"left={int(metric_values.get('local_classic_sub_branch_left_spawn_count', 0.0))}, "
+                f"right={int(metric_values.get('local_classic_sub_branch_right_spawn_count', 0.0))}, "
+                f"connector_touches={int(metric_values.get('local_classic_sub_branch_connector_touch_count', 0.0))}"
+            )
     local_reroute_candidates = int(metric_values.get("local_reroute_candidate_count", 0.0))
     local_reroute_applied = int(metric_values.get("local_reroute_applied_count", 0.0))
     local_reroute_fallback = int(metric_values.get("local_reroute_fallback_count", 0.0))
@@ -708,6 +726,15 @@ def _build_city_artifact_from_core(
             f"applied {local_repel_apply}/{local_repel_eval} "
             f"(post-contact {local_repel_post_contact}, avg clearance gain={local_repel_avg_gain:.1f}m)"
         )
+    endpoint_bridge_candidates = int(metric_values.get("local_endpoint_bridge_candidate_count", 0.0))
+    endpoint_bridge_success = int(metric_values.get("local_endpoint_bridge_success_count", 0.0))
+    endpoint_bridge_attempts = int(metric_values.get("local_endpoint_bridge_attempt_count", 0.0))
+    if endpoint_bridge_candidates > 0 or endpoint_bridge_success > 0:
+        metric_notes.append(
+            "Local endpoint bridge (overlimit fallback): "
+            f"success {endpoint_bridge_success}/{max(endpoint_bridge_candidates, 1)} "
+            f"(attempts={endpoint_bridge_attempts}, avg_len={float(metric_values.get('local_endpoint_bridge_avg_length_m', 0.0)):.0f}m)"
+        )
     supplement_budget = int(metric_values.get("local_grid_supplement_budget", 0.0))
     if supplement_budget > 0:
         supplement_added = int(metric_values.get("local_grid_supplement_added_count", 0.0))
@@ -752,6 +779,7 @@ def _build_city_artifact_from_core(
         ("frontier_supp", "road_hierarchy_local_frontier_supplement_ms"),
         ("grid_supp", "road_hierarchy_local_grid_supplement_ms"),
         ("reroute", "road_hierarchy_local_reroute_ms"),
+        ("endpoint_bridge", "road_hierarchy_local_endpoint_bridge_ms"),
         ("append", "road_hierarchy_local_append_ms"),
         ("cov_final", "road_hierarchy_local_coverage_final_ms"),
     )

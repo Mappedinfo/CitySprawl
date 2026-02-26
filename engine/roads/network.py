@@ -2480,6 +2480,219 @@ def _generate_hierarchy_linework(
         else 0.0
     )
 
+    # Overlimit-unconnected local trace fallback: connect local endpoints with an A* bridge
+    # after optional reroute (geometry stabilized) but before append/intersection processing.
+    t_local_endpoint_bridge_start = perf_counter()
+    endpoint_bridge_candidate_count = 0
+    endpoint_bridge_attempt_count = 0
+    endpoint_bridge_success_count = 0
+    endpoint_bridge_failed_count = 0
+    endpoint_bridge_length_sum_m = 0.0
+    endpoint_bridge_route_cost_sum = 0.0
+    if pending_local_entries:
+        def _entry_meta_get(entry: dict, key: str, default=None):
+            meta = entry.get("meta")
+            if isinstance(meta, dict):
+                return meta.get(key, default)
+            if meta is not None:
+                return getattr(meta, key, default)
+            return default
+
+        def _entry_endpoint_heading(entry: dict, endpoint_kind: str) -> Optional[Vec2]:
+            pts = list(entry.get("pts", []) or [])
+            if len(pts) < 2:
+                return None
+            if str(endpoint_kind) == "start":
+                v = (pts[0] - pts[1]).normalized()
+            else:
+                v = (pts[-1] - pts[-2]).normalized()
+            return v if v.length() > 1e-9 else None
+
+        endpoint_bridge_min_dist_m = max(80.0, float(local_spacing_m) * 0.6)
+        endpoint_bridge_max_dist_m = max(1800.0, float(local_spacing_m) * 12.0)
+        endpoint_bridge_max_targets_per_candidate = 8
+        used_endpoints: set[tuple[int, str]] = set()
+
+        endpoint_pool: list[dict[str, object]] = []
+        for entry_idx, entry in enumerate(pending_local_entries):
+            pts = list(entry.get("pts", []) or [])
+            if len(pts) < 2:
+                continue
+            continuity_id = str(entry.get("continuity_id") or "")
+            flags = set(entry.get("flags", set()) or set())
+            block_idx = int(_entry_meta_get(entry, "block_idx", -1) or -1)
+            branch_role = str(_entry_meta_get(entry, "branch_role", "unknown") or "unknown")
+            trace_len_m = float(_entry_meta_get(entry, "trace_len_m", entry.get("length_m", 0.0) or 0.0) or 0.0)
+            connected_local_count = int(_entry_meta_get(entry, "local_touch_count", 0) or 0)
+            for endpoint_kind, pos in (("start", pts[0]), ("end", pts[-1])):
+                endpoint_pool.append(
+                    {
+                        "entry_idx": int(entry_idx),
+                        "endpoint_kind": str(endpoint_kind),
+                        "pos": pos,
+                        "continuity_id": continuity_id,
+                        "flags": flags,
+                        "block_idx": block_idx,
+                        "branch_role": branch_role,
+                        "trace_len_m": trace_len_m,
+                        "connected_local_count": connected_local_count,
+                        "heading": _entry_endpoint_heading(entry, endpoint_kind),
+                    }
+                )
+
+        overlimit_candidates: list[tuple[float, int]] = []
+        for entry_idx, entry in enumerate(pending_local_entries):
+            if bool(_entry_meta_get(entry, "is_overlimit_unconnected_candidate", False)):
+                endpoint_bridge_candidate_count += 1
+                overlimit_candidates.append(
+                    (float(_entry_meta_get(entry, "trace_len_m", entry.get("length_m", 0.0) or 0.0) or 0.0), int(entry_idx))
+                )
+                entry_flags = set(entry.get("flags", set()) or set())
+                entry_flags.add("local_overlimit_unconnected")
+                entry["flags"] = entry_flags
+        overlimit_candidates.sort(key=lambda item: (-item[0], item[1]))
+
+        for _trace_len_m, src_idx in overlimit_candidates:
+            if not (0 <= src_idx < len(pending_local_entries)):
+                continue
+            src_entry = pending_local_entries[src_idx]
+            src_pts = list(src_entry.get("pts", []) or [])
+            if len(src_pts) < 2:
+                continue
+            src_cont = str(src_entry.get("continuity_id") or "")
+            src_candidates: list[tuple[float, dict[str, object], dict[str, object], float]] = []
+
+            src_endpoints = [ep for ep in endpoint_pool if int(ep.get("entry_idx", -1)) == int(src_idx)]
+            for src_ep in src_endpoints:
+                src_key = (int(src_ep.get("entry_idx", -1)), str(src_ep.get("endpoint_kind", "")))
+                if src_key in used_endpoints:
+                    continue
+                src_pos = src_ep.get("pos")
+                if not isinstance(src_pos, Vec2):
+                    continue
+                src_heading = src_ep.get("heading")
+                for tgt_ep in endpoint_pool:
+                    tgt_idx = int(tgt_ep.get("entry_idx", -1))
+                    tgt_kind = str(tgt_ep.get("endpoint_kind", ""))
+                    tgt_key = (tgt_idx, tgt_kind)
+                    if tgt_key in used_endpoints:
+                        continue
+                    if tgt_idx == int(src_idx):
+                        continue
+                    tgt_cont = str(tgt_ep.get("continuity_id") or "")
+                    if src_cont and tgt_cont and src_cont == tgt_cont:
+                        continue
+                    tgt_pos = tgt_ep.get("pos")
+                    if not isinstance(tgt_pos, Vec2):
+                        continue
+                    dist = float(src_pos.distance_to(tgt_pos))
+                    if dist < endpoint_bridge_min_dist_m or dist > endpoint_bridge_max_dist_m:
+                        continue
+                    dir_to_tgt = (tgt_pos - src_pos).normalized()
+                    if dir_to_tgt.length() <= 1e-9:
+                        continue
+                    heading_score = 0.0
+                    if isinstance(src_heading, Vec2) and src_heading.length() > 1e-9:
+                        heading_score += max(0.0, float(src_heading.dot(dir_to_tgt)))
+                    tgt_heading = tgt_ep.get("heading")
+                    if isinstance(tgt_heading, Vec2) and tgt_heading.length() > 1e-9:
+                        heading_score += max(0.0, float(tgt_heading.dot((src_pos - tgt_pos).normalized())))
+                    # Prefer closer targets with compatible endpoint tangents.
+                    score = float(dist - 120.0 * heading_score)
+                    src_candidates.append((score, src_ep, tgt_ep, dist))
+
+            if not src_candidates:
+                endpoint_bridge_failed_count += 1
+                entry_flags = set(src_entry.get("flags", set()) or set())
+                entry_flags.add("local_overlimit_bridge_failed")
+                src_entry["flags"] = entry_flags
+                continue
+
+            src_candidates.sort(key=lambda item: item[0])
+            bridged = False
+            for _score, src_ep, tgt_ep, _dist in src_candidates[:endpoint_bridge_max_targets_per_candidate]:
+                src_pos = src_ep["pos"]
+                tgt_pos = tgt_ep["pos"]
+                if not isinstance(src_pos, Vec2) or not isinstance(tgt_pos, Vec2):
+                    continue
+                endpoint_bridge_attempt_count += 1
+                route_pts = _route_points_with_cost_mask(
+                    src_pos,
+                    tgt_pos,
+                    extent_m=extent_m,
+                    slope=slope,
+                    river_mask=river_mask,
+                    road_class="local",
+                    corridor_geom=None,
+                    slope_penalty_scale=1.0,
+                    river_penalty_scale=1.2,
+                )
+                if not route_pts or len(route_pts) < 2:
+                    continue
+                bridge_len = _polyline_length(route_pts)
+                if bridge_len <= 1e-6:
+                    continue
+                endpoint_bridge_success_count += 1
+                endpoint_bridge_length_sum_m += float(bridge_len)
+                endpoint_bridge_route_cost_sum += float(bridge_len)
+                src_key = (int(src_ep.get("entry_idx", -1)), str(src_ep.get("endpoint_kind", "")))
+                tgt_key = (int(tgt_ep.get("entry_idx", -1)), str(tgt_ep.get("endpoint_kind", "")))
+                used_endpoints.add(src_key)
+                used_endpoints.add(tgt_key)
+                pending_local_entries.append(
+                    {
+                        "pts": list(route_pts),
+                        "cul": False,
+                        "meta": {
+                            "block_idx": int(_entry_meta_get(src_entry, "block_idx", -1) or -1),
+                            "is_spine_candidate": False,
+                            "connected_to_collector": False,
+                            "culdesac": False,
+                            "branch_role": "endpoint_bridge",
+                            "trace_len_m": float(bridge_len),
+                            "local_touch_count": 2,
+                            "reached_trace_cap": False,
+                            "terminal_stop_reason": "endpoint_bridge",
+                            "is_overlimit_unconnected_candidate": False,
+                        },
+                        "is_grid_supplement": False,
+                        "flags": {"local_endpoint_bridge"},
+                        "length_m": float(bridge_len),
+                        "endpoints": [route_pts[0], route_pts[-1]],
+                        "continuity_id": _new_local_continuity_id(prefix="local-link"),
+                        "parent_continuity_id": None,
+                        "segment_order": None,
+                    }
+                )
+                local_added += 1
+                bridged = True
+                break
+
+            if not bridged:
+                endpoint_bridge_failed_count += 1
+                entry_flags = set(src_entry.get("flags", set()) or set())
+                entry_flags.add("local_overlimit_bridge_failed")
+                src_entry["flags"] = entry_flags
+
+        if endpoint_bridge_candidate_count > 0:
+            notes.append(
+                f"local_endpoint_bridge:success:{int(endpoint_bridge_success_count)}/{int(max(endpoint_bridge_candidate_count, 1))}"
+            )
+            if endpoint_bridge_failed_count > 0:
+                notes.append(f"local_endpoint_bridge:failed:{int(endpoint_bridge_failed_count)}")
+
+    numeric["road_hierarchy_local_endpoint_bridge_ms"] = float((perf_counter() - t_local_endpoint_bridge_start) * 1000.0)
+    numeric["local_endpoint_bridge_candidate_count"] = float(endpoint_bridge_candidate_count)
+    numeric["local_endpoint_bridge_attempt_count"] = float(endpoint_bridge_attempt_count)
+    numeric["local_endpoint_bridge_success_count"] = float(endpoint_bridge_success_count)
+    numeric["local_endpoint_bridge_failed_count"] = float(endpoint_bridge_failed_count)
+    numeric["local_endpoint_bridge_avg_length_m"] = (
+        float(endpoint_bridge_length_sum_m / endpoint_bridge_success_count) if endpoint_bridge_success_count > 0 else 0.0
+    )
+    numeric["local_endpoint_bridge_avg_route_cost"] = (
+        float(endpoint_bridge_route_cost_sum / endpoint_bridge_success_count) if endpoint_bridge_success_count > 0 else 0.0
+    )
+
     # Append local edges after optional reroute so intersections see final local geometry.
     t_local_append_start = perf_counter()
     for entry in pending_local_entries:

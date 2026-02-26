@@ -185,6 +185,9 @@ def test_classic_local_fill_emits_trace_length_stats_and_hits_target_band_on_lar
     assert numeric.get("local_classic_major_portal_seed_count", 0.0) > 0.0
     assert 399.0 <= numeric.get("local_classic_major_seed_spacing_interval_obs_min_m", 0.0) <= 501.0
     assert 399.0 <= numeric.get("local_classic_major_seed_spacing_interval_obs_max_m", 0.0) <= 501.0
+    assert numeric.get("local_classic_long_trace_cap_m", 0.0) >= 6000.0
+    assert "local_classic_sub_branch_trigger_count" in numeric
+    assert "local_classic_local_touch_count_total" in numeric
 
 
 def test_classic_local_fill_ignores_hard_max_distance_stop_in_coverage_first_mode():
@@ -300,7 +303,7 @@ def test_classic_local_fill_mainlines_continue_through_perpendicular_network_con
             local_classic_probe_step_m=16.0,
             local_classic_seed_spacing_m=220.0,
             local_classic_min_trace_len_m=40.0,
-            local_classic_max_trace_len_m=120.0,  # root mainlines should exceed this soft cap
+            local_classic_max_trace_len_m=600.0,  # hard cap semantics in new design
             local_classic_continue_prob=0.02,  # root/depth<=1 should not stochastic-stop
             local_classic_branch_prob=0.0,
             local_classic_culdesac_prob=0.5,
@@ -438,6 +441,105 @@ def test_classic_local_fill_roots_local_traces_near_major_roads():
     # Root/shallow traces should detach from the major corridor instead of staying
     # glued to arterial/collector centerlines for their early segments.
     assert max(shallow_clearance_gains) >= 40.0
+
+
+def test_classic_local_fill_spawns_sub_local_connector_branches_on_mainline_cadence():
+    nodes = [
+        BuiltRoadNode(id="a0", pos=Vec2(100.0, 260.0), kind="hub"),
+        BuiltRoadNode(id="a1", pos=Vec2(2400.0, 260.0), kind="hub"),
+    ]
+    edges = [
+        BuiltRoadEdge(
+            id="art0",
+            u="a0",
+            v="a1",
+            road_class="arterial",
+            weight=1.0,
+            length_m=2300.0,
+            river_crossings=0,
+            width_m=18.0,
+            render_order=0,
+            path_points=[Vec2(100.0, 260.0), Vec2(2400.0, 260.0)],
+        )
+    ]
+    blocks = [Polygon([(60.0, 60.0), (2460.0, 60.0), (2460.0, 1960.0), (60.0, 1960.0)])]
+    height = np.zeros((128, 128), dtype=np.float64)
+    slope = np.zeros((128, 128), dtype=np.float64)
+    river_mask = np.zeros((128, 128), dtype=bool)
+    river_union = Polygon()
+
+    traces, _cul_flags, trace_meta, _notes, numeric = generate_classic_local_fill(
+        extent_m=2500.0,
+        height=height,
+        slope=slope,
+        river_mask=river_mask,
+        river_areas=[],
+        river_union=river_union,
+        nodes=nodes,
+        edges=edges,
+        hubs=[],
+        blocks=blocks,
+        cfg=LocalClassicFillConfig(
+            local_spacing_m=120.0,
+            local_classic_probe_step_m=20.0,
+            local_classic_min_trace_len_m=60.0,
+            local_classic_max_trace_len_m=1600.0,
+            local_classic_continue_prob=0.98,
+            local_classic_branch_prob=0.0,
+            local_classic_culdesac_prob=0.0,
+            local_classic_max_segments_per_block=16,
+            local_sub_branch_interval_min_m=200.0,
+            local_sub_branch_interval_max_m=200.0,
+            local_sub_branch_length_cap_m=600.0,
+        ),
+        seed=41,
+    )
+
+    assert len(traces) > 0
+    assert numeric.get("local_classic_sub_branch_trigger_count", 0.0) >= 1.0
+    assert numeric.get("local_classic_sub_branch_left_spawn_count", 0.0) >= 1.0
+    assert numeric.get("local_classic_sub_branch_right_spawn_count", 0.0) >= 1.0
+    assert trace_meta and all(hasattr(m, "branch_role") for m in trace_meta)
+
+
+def test_classic_local_fill_marks_overlimit_unconnected_local_candidates():
+    blocks = [Polygon([(100.0, 100.0), (4900.0, 100.0), (4900.0, 4900.0), (100.0, 4900.0)])]
+    height = np.zeros((128, 128), dtype=np.float64)
+    slope = np.zeros((128, 128), dtype=np.float64)
+    river_mask = np.zeros((128, 128), dtype=bool)
+    river_union = Polygon()
+
+    traces, _cul_flags, trace_meta, _notes, numeric = generate_classic_local_fill(
+        extent_m=5000.0,
+        height=height,
+        slope=slope,
+        river_mask=river_mask,
+        river_areas=[],
+        river_union=river_union,
+        nodes=[],
+        edges=[],
+        hubs=[],
+        blocks=blocks,
+        cfg=LocalClassicFillConfig(
+            local_spacing_m=140.0,
+            local_classic_probe_step_m=20.0,
+            local_classic_min_trace_len_m=40.0,
+            local_classic_max_trace_len_m=240.0,
+            local_classic_continue_prob=0.99,
+            local_classic_branch_prob=0.0,
+            local_classic_culdesac_prob=0.0,
+            local_classic_max_segments_per_block=4,
+            local_allow_disconnected_accept=True,
+            local_major_seed_spacing_min_m=10_000.0,
+            local_major_seed_spacing_max_m=10_500.0,
+        ),
+        seed=53,
+    )
+
+    assert len(traces) > 0
+    assert numeric.get("local_classic_trace_reached_cap_count", 0.0) >= 1.0
+    assert numeric.get("local_classic_trace_overlimit_unconnected_count", 0.0) >= 1.0
+    assert any(bool(getattr(m, "is_overlimit_unconnected_candidate", False)) for m in trace_meta)
 
 
 def test_classify_network_contact_mode_emits_opposing_parallel_and_perpendicular():

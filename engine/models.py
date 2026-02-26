@@ -68,7 +68,7 @@ class RoadsConfig(StrictModel):
     local_reroute_apply_to_grid_supplement: bool = True
     local_classic_probe_step_m: float = Field(default=18.0, gt=1.0, le=500.0)
     local_classic_seed_spacing_m: float = Field(default=110.0, gt=5.0, le=5000.0)
-    local_classic_max_trace_len_m: float = Field(default=420.0, gt=10.0, le=50000.0)
+    local_classic_max_trace_len_m: float = Field(default=6000.0, gt=10.0, le=50000.0)
     local_classic_min_trace_len_m: float = Field(default=48.0, gt=1.0, le=5000.0)
     local_classic_turn_limit_deg: float = Field(default=54.0, ge=1.0, le=180.0)
     local_classic_branch_prob: float = Field(default=0.62, ge=0.0, le=1.0)

@@ -70,5 +70,6 @@ def test_hierarchical_roads_emit_collector_and_dense_locals():
     assert artifact.metrics.local_classic_stop_road_too_far_count == 0
     assert any("Collector generator: classic_turtle" in n or "Collector generator: grid_clip" in n for n in artifact.metrics.notes)
     assert any("Local generator:" in n for n in artifact.metrics.notes)
+    assert any("Classic local trace cap:" in n for n in artifact.metrics.notes)
     assert any("local geometry reroute" in n.lower() for n in artifact.metrics.notes)
     assert any("Local road coverage (buildable area):" in n for n in artifact.metrics.notes)

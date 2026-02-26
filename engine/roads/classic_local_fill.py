@@ -31,15 +31,16 @@ class LocalClassicFillConfig:
     local_major_seed_spacing_min_m: float = 400.0
     local_major_seed_spacing_max_m: float = 500.0
     local_major_seed_inset_m: float = 10.0
-    # Soft target for semantic local traces (not final topology-split edges).
-    local_trace_target_min_m: float = 500.0
-    local_trace_target_max_m: float = 1000.0
-    local_trace_soft_cap_m: float = 1200.0
+    # Semantic local trace targets (trace continuity, not final topology-split edges).
+    # Current design favors long mainlines while downstream topology may still split edges.
+    local_trace_target_min_m: float = 1200.0
+    local_trace_target_max_m: float = 4800.0
+    local_trace_soft_cap_m: float = 5600.0
     local_trace_force_continue_until_min: bool = True
     local_trace_exception_small_block_long_axis_m: float = 320.0
     local_classic_probe_step_m: float = 18.0
     local_classic_seed_spacing_m: float = 110.0
-    local_classic_max_trace_len_m: float = 420.0
+    local_classic_max_trace_len_m: float = 6000.0
     local_classic_min_trace_len_m: float = 48.0
     local_classic_turn_limit_deg: float = 54.0
     local_classic_branch_prob: float = 0.62
@@ -52,6 +53,12 @@ class LocalClassicFillConfig:
     local_community_spine_prob: float = 0.28
     local_arterial_setback_weight: float = 0.5
     local_collector_follow_weight: float = 0.9
+    # Root mainline sub-local connector spawning cadence and behavior.
+    local_sub_branch_interval_min_m: float = 200.0
+    local_sub_branch_interval_max_m: float = 400.0
+    local_sub_branch_connector_seek_radius_m: float = 1200.0
+    local_sub_branch_max_depth: int = 2
+    local_sub_branch_length_cap_m: float = 1800.0
     local_allow_disconnected_accept: bool = False
     slope_straight_threshold_deg: float = 5.0
     slope_serpentine_threshold_deg: float = 15.0
@@ -73,6 +80,11 @@ class _State:
     lineage_id: str = field(default="", compare=False)
     parent_lineage_id: Optional[str] = field(default=None, compare=False)
     from_major_portal: bool = field(default=False, compare=False)
+    branch_role: str = field(default="mainline", compare=False)
+    next_sub_branch_trigger_m: float = field(default=float("inf"), compare=False)
+    local_touch_count: int = field(default=0, compare=False)
+    reached_trace_cap: bool = field(default=False, compare=False)
+    terminal_stop_reason: str = field(default="", compare=False)
 
 
 @dataclass
@@ -84,6 +96,12 @@ class LocalTraceMeta:
     depth: int = 0
     trace_lineage_id: Optional[str] = None
     parent_trace_lineage_id: Optional[str] = None
+    branch_role: str = "mainline"
+    trace_len_m: float = 0.0
+    local_touch_count: int = 0
+    reached_trace_cap: bool = False
+    terminal_stop_reason: str = ""
+    is_overlimit_unconnected_candidate: bool = False
 
 
 def _point_in_poly_or_close(poly, p: Vec2, tol: float = 1.0) -> bool:
@@ -331,6 +349,44 @@ def _estimate_block_forward_clearance(
     return float(d)
 
 
+def _nearest_point_on_segments(p: Vec2, segments: Sequence[Segment]) -> tuple[float, Optional[Vec2]]:
+    best_d = float("inf")
+    best_p: Optional[Vec2] = None
+    for seg in segments:
+        if seg.length() <= 1e-9:
+            continue
+        proj = project_point_to_segment(p, seg)
+        d = p.distance_to(proj)
+        if d < best_d:
+            best_d = d
+            best_p = proj
+    return float(best_d), best_p
+
+
+def _nearest_endpoint_target(
+    p: Vec2,
+    endpoints: Sequence[tuple[Vec2, Optional[str]]],
+    *,
+    exclude_lineage: Optional[str],
+    max_dist_m: float,
+) -> tuple[float, Optional[Vec2], Optional[str]]:
+    best_d = float("inf")
+    best_p: Optional[Vec2] = None
+    best_lineage: Optional[str] = None
+    max_d = float(max_dist_m)
+    for ep, lineage_id in endpoints:
+        if exclude_lineage and lineage_id and str(lineage_id) == str(exclude_lineage):
+            continue
+        d = p.distance_to(ep)
+        if d > max_d:
+            continue
+        if d < best_d:
+            best_d = d
+            best_p = ep
+            best_lineage = lineage_id
+    return float(best_d), best_p, best_lineage
+
+
 def generate_classic_local_fill(
     *,
     extent_m: float,
@@ -370,6 +426,7 @@ def generate_classic_local_fill(
     base_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial", "collector", "local"})
     collector_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"collector"})
     arterial_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial"})
+    existing_local_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"local"})
     higher_order_segments = list(arterial_segments) + list(collector_segments)
     runtime_segments: list[Segment] = []
 
@@ -380,9 +437,9 @@ def generate_classic_local_fill(
     block_long_axes: list[float] = []
     block_trace_target_enabled: list[bool] = []
     local_spacing_m = max(24.0, float(getattr(cfg, "local_spacing_m", 130.0) or 130.0))
-    trace_target_min_m = max(120.0, float(getattr(cfg, "local_trace_target_min_m", 500.0) or 500.0))
-    trace_target_max_m = max(trace_target_min_m + 80.0, float(getattr(cfg, "local_trace_target_max_m", 1000.0) or 1000.0))
-    trace_soft_cap_m = max(trace_target_max_m + 120.0, float(getattr(cfg, "local_trace_soft_cap_m", 1200.0) or 1200.0))
+    trace_target_min_m = max(120.0, float(getattr(cfg, "local_trace_target_min_m", 1200.0) or 1200.0))
+    trace_target_max_m = max(trace_target_min_m + 80.0, float(getattr(cfg, "local_trace_target_max_m", 4800.0) or 4800.0))
+    trace_soft_cap_m = max(trace_target_max_m + 120.0, float(getattr(cfg, "local_trace_soft_cap_m", 5600.0) or 5600.0))
     small_block_exception_long_axis_m = max(
         260.0,
         float(getattr(cfg, "local_trace_exception_small_block_long_axis_m", 650.0) or 650.0),
@@ -402,6 +459,14 @@ def generate_classic_local_fill(
         for n in nodes
         if hasattr(n, "pos")
     }
+    existing_local_endpoints: list[tuple[Vec2, Optional[str]]] = []
+    for edge in edges:
+        if str(getattr(edge, "road_class", "")).lower() != "local":
+            continue
+        edge_pts = _iter_polyline_points(edge, node_lookup)
+        if len(edge_pts) >= 2:
+            existing_local_endpoints.append((edge_pts[0], None))
+            existing_local_endpoints.append((edge_pts[-1], None))
 
     def _add_major_portal_seed(block_idx: int, pos: Vec2, inward_dir: Vec2, clearance_m: float) -> bool:
         if not (0 <= int(block_idx) < len(major_seed_portal_by_block)):
@@ -418,6 +483,19 @@ def generate_classic_local_fill(
                 return False
         bucket.append((pos, d0, float(max(0.0, clearance_m))))
         return True
+
+    # Precompute sub-branch trigger cadence for root seed initialization.
+    _sub_branch_interval_min_seed_m = max(
+        max(8.0, float(cfg.local_classic_probe_step_m)) * 4.0,
+        float(getattr(cfg, "local_sub_branch_interval_min_m", 200.0) or 200.0),
+    )
+    _sub_branch_interval_max_seed_m = max(
+        _sub_branch_interval_min_seed_m,
+        float(getattr(cfg, "local_sub_branch_interval_max_m", 400.0) or 400.0),
+    )
+
+    def _sample_initial_sub_branch_trigger_distance() -> float:
+        return float(rng.uniform(_sub_branch_interval_min_seed_m, _sub_branch_interval_max_seed_m))
 
     # Precompute local seed anchors on major roads (arterial + collector) so
     # local roads branch from the major network instead of spawning from block edges.
@@ -563,10 +641,12 @@ def generate_classic_local_fill(
                     block_idx=bi,
                     depth=0,
                     lineage_id=lineage_id,
-                    parent_lineage_id=None,
-                    from_major_portal=bool(from_major_portal),
-                ),
-            )
+                        parent_lineage_id=None,
+                        from_major_portal=bool(from_major_portal),
+                        branch_role="mainline",
+                        next_sub_branch_trigger_m=_sample_initial_sub_branch_trigger_distance(),
+                    ),
+                )
             added += 1
         block_seed_counts.append(added)
 
@@ -589,14 +669,38 @@ def generate_classic_local_fill(
         "perpendicular_continue": 0,
         "oblique_continue": 0,
     }
+    runtime_local_endpoints: list[tuple[Vec2, Optional[str]]] = []
     major_repel_eval_count = 0
     major_repel_apply_count = 0
     major_repel_post_contact_boost_count = 0
     major_repel_no_valid_candidate_count = 0
     major_repel_clearance_gain_sum_m = 0.0
+    local_touch_count_total = 0
+    local_trace_reached_cap_count = 0
+    local_trace_overlimit_unconnected_count = 0
+    local_trace_over_6km_count = 0
+    local_sub_branch_trigger_count = 0
+    local_sub_branch_left_spawn_count = 0
+    local_sub_branch_right_spawn_count = 0
+    local_sub_branch_connector_touch_count = 0
 
     step_m = max(8.0, float(cfg.local_classic_probe_step_m))
     junction_probe = max(8.0, step_m * 0.85)
+    sub_branch_interval_min_m = max(step_m * 4.0, float(getattr(cfg, "local_sub_branch_interval_min_m", 200.0) or 200.0))
+    sub_branch_interval_max_m = max(
+        sub_branch_interval_min_m,
+        float(getattr(cfg, "local_sub_branch_interval_max_m", 400.0) or 400.0),
+    )
+    sub_branch_seek_radius_m = max(
+        120.0,
+        float(getattr(cfg, "local_sub_branch_connector_seek_radius_m", 1200.0) or 1200.0),
+    )
+    sub_branch_max_depth = max(0, int(getattr(cfg, "local_sub_branch_max_depth", 2) or 2))
+    sub_branch_length_cap_m = max(
+        float(cfg.local_classic_min_trace_len_m) * 2.0,
+        float(getattr(cfg, "local_sub_branch_length_cap_m", 1800.0) or 1800.0),
+    )
+    local_trace_hard_cap_m = max(float(cfg.local_classic_min_trace_len_m) + 1.0, float(cfg.local_classic_max_trace_len_m))
     major_segments = higher_order_segments
     major_repel_influence_radius_m = max(local_spacing_m * 1.15, 140.0)
     major_repel_max_samples = 12
@@ -608,6 +712,9 @@ def generate_classic_local_fill(
     detach_collector_follow_cap = 0.32
     lambda_clearance = 1.15
     clearance_gain_min_m = 4.0
+
+    def _sample_sub_branch_trigger_distance() -> float:
+        return float(rng.uniform(sub_branch_interval_min_m, sub_branch_interval_max_m))
 
     while queue:
         st = heapq.heappop(queue)
@@ -630,7 +737,10 @@ def generate_classic_local_fill(
         pts = [st.pos]
         prev_dir = st.direction.normalized()
         total_len = 0.0
-        connected = 0
+        branch_role = str(getattr(st, "branch_role", "mainline") or "mainline")
+        connected_network_count = 0
+        connected_local_count = int(max(0, getattr(st, "local_touch_count", 0) or 0))
+        connected_major_count = 0
         cul = False
         reason = "max_steps"
         trace_len_cap = float(block_trace_len_caps[st.block_idx]) if st.block_idx < len(block_trace_len_caps) else float(cfg.local_classic_max_trace_len_m)
@@ -639,6 +749,15 @@ def generate_classic_local_fill(
         trace_target_min_this = float(trace_target_min_m if trace_target_enabled else max(local_spacing_m * 1.8, 220.0))
         trace_target_max_this = float(trace_target_max_m if trace_target_enabled else max(trace_target_min_this + 120.0, min(trace_len_cap, local_spacing_m * 4.6)))
         trace_soft_cap_this = float(min(trace_len_cap, trace_soft_cap_m if trace_target_enabled else trace_len_cap))
+        if branch_role == "sub_local_connector":
+            trace_target_enabled = False
+            trace_target_min_this = float(max(local_spacing_m * 1.4, 160.0))
+            trace_target_max_this = float(min(sub_branch_length_cap_m, max(trace_target_min_this + 120.0, local_spacing_m * 6.0)))
+            trace_soft_cap_this = float(min(sub_branch_length_cap_m, max(trace_target_max_this + 80.0, local_spacing_m * 7.5)))
+            trace_len_cap = float(min(trace_len_cap, sub_branch_length_cap_m))
+            endpoint_span_cap = float(min(endpoint_span_cap, trace_len_cap * 0.92))
+        elif branch_role == "fill_branch":
+            trace_soft_cap_this = float(min(trace_soft_cap_this, trace_len_cap))
         block_long_axis_this = float(block_long_axes[st.block_idx]) if st.block_idx < len(block_long_axes) else 0.0
         near_network_terminate_min_len = max(local_spacing_m * 2.4, 180.0)
         # Treat only the first accepted root trace in a block as the persistent
@@ -651,10 +770,22 @@ def generate_classic_local_fill(
         active_block_idx = int(st.block_idx)
         active_block = block
         detach_boost_until_step = -1
+        trace_reached_cap = False
 
         d0, _ = _nearest_road_distance_and_projection(st.pos, base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
         if d0 < junction_probe:
-            connected += 1
+            connected_network_count += 1
+            local_contact_segments = list(existing_local_segments) + list(runtime_segments)
+            d0_local, _ = _nearest_road_distance_and_projection(st.pos, local_contact_segments) if local_contact_segments else (float("inf"), None)
+            if d0_local < junction_probe:
+                connected_local_count += 1
+                local_touch_count_total += 1
+                if branch_role == "sub_local_connector":
+                    local_sub_branch_connector_touch_count += 1
+            else:
+                d0_major, _ = _nearest_road_distance_and_projection(st.pos, major_segments) if major_segments else (float("inf"), None)
+                if d0_major < junction_probe:
+                    connected_major_count += 1
 
         for step_idx in range(max_steps):
             cur = pts[-1]
@@ -691,6 +822,49 @@ def generate_classic_local_fill(
                 if d.dot(pref) < 0:
                     pref = Vec2(-pref.x, -pref.y)
                 d = Vec2(d.x * (1.0 - w) + pref.x * w, d.y * (1.0 - w) + pref.y * w).normalized()
+
+            if branch_role == "sub_local_connector":
+                local_endpoint_pool = list(existing_local_endpoints) + list(runtime_local_endpoints)
+                local_segment_pool = list(existing_local_segments) + list(runtime_segments)
+                seek_target_dir: Optional[Vec2] = None
+                endpoint_target_weight = 0.0
+                d_ep, ep_target, _ep_lineage = _nearest_endpoint_target(
+                    cur,
+                    local_endpoint_pool,
+                    exclude_lineage=(st.lineage_id or None),
+                    max_dist_m=sub_branch_seek_radius_m,
+                )
+                if ep_target is not None and d_ep > 1e-6:
+                    seek_target_dir = (ep_target - cur).normalized()
+                    endpoint_target_weight = max(0.0, min(1.0, 1.0 - (d_ep / max(sub_branch_seek_radius_m, 1e-6))))
+                if (seek_target_dir is None or seek_target_dir.length() <= 1e-9) and local_segment_pool:
+                    d_seg_local, seg_target = _nearest_point_on_segments(cur, local_segment_pool)
+                    if seg_target is not None and d_seg_local <= sub_branch_seek_radius_m and d_seg_local > 1e-6:
+                        seek_target_dir = (seg_target - cur).normalized()
+                        endpoint_target_weight = max(
+                            0.0,
+                            min(1.0, 0.75 * (1.0 - (d_seg_local / max(sub_branch_seek_radius_m, 1e-6)))),
+                        )
+                if seek_target_dir is not None and seek_target_dir.length() > 1e-9:
+                    if major_segments and d_major_cur < detach_influence_radius_m:
+                        rep = _major_repulsion_vector(
+                            cur,
+                            major_segments,
+                            influence_radius_m=major_repel_influence_radius_m,
+                            max_samples=major_repel_max_samples,
+                        )
+                        if rep is not None and rep.length() > 1e-9:
+                            # Keep connector-seeking, but avoid long parallel runs hugging major corridors.
+                            repel_w = 0.20 + 0.25 * max(0.0, min(1.0, 1.0 - d_major_cur / max(detach_influence_radius_m, 1e-6)))
+                            seek_target_dir = Vec2(
+                                seek_target_dir.x * (1.0 - repel_w) + rep.x * repel_w,
+                                seek_target_dir.y * (1.0 - repel_w) + rep.y * repel_w,
+                            ).normalized()
+                    seek_w = 0.28 + 0.40 * endpoint_target_weight
+                    d = Vec2(
+                        d.x * (1.0 - seek_w) + seek_target_dir.x * seek_w,
+                        d.y * (1.0 - seek_w) + seek_target_dir.y * seek_w,
+                    ).normalized()
 
             d_base = d.normalized()
             if (
@@ -831,7 +1005,18 @@ def generate_classic_local_fill(
                 if proj_block_idx is not None and proj_net.distance_to(cur) > 1.5:
                     pts.append(proj_net)
                     total_len += cur.distance_to(proj_net)
-                    connected += 1
+                    connected_network_count += 1
+                    local_contact_segments = list(existing_local_segments) + list(runtime_segments)
+                    d_local_touch, _ = _nearest_road_distance_and_projection(proj_net, local_contact_segments) if local_contact_segments else (float("inf"), None)
+                    if d_local_touch < max(junction_probe * 1.15, 10.0):
+                        connected_local_count += 1
+                        local_touch_count_total += 1
+                        if branch_role == "sub_local_connector":
+                            local_sub_branch_connector_touch_count += 1
+                    else:
+                        d_major_touch, _ = _nearest_road_distance_and_projection(proj_net, major_segments) if major_segments else (float("inf"), None)
+                        if d_major_touch < max(junction_probe * 1.15, 10.0):
+                            connected_major_count += 1
                     snapped_to_network = True
                     active_block_idx = int(proj_block_idx)
                     active_block = blocks[active_block_idx]
@@ -868,6 +1053,43 @@ def generate_classic_local_fill(
             pts.append(nxt)
             total_len += cur.distance_to(nxt)
             prev_dir = d
+
+            if (
+                branch_role == "mainline"
+                and st.depth <= 1
+                and (st.depth + 1) <= sub_branch_max_depth
+            ):
+                while total_len >= float(st.next_sub_branch_trigger_m):
+                    local_sub_branch_trigger_count += 1
+                    branch_signs = (-1.0, 1.0)
+                    for sign in branch_signs:
+                        bdir = _turn_vec(d, sign * float(rng.uniform(88.0, 92.0)))
+                        if bdir.length() <= 1e-9:
+                            continue
+                        if sign < 0:
+                            local_sub_branch_left_spawn_count += 1
+                            role_tag = "L"
+                        else:
+                            local_sub_branch_right_spawn_count += 1
+                            role_tag = "R"
+                        heapq.heappush(
+                            queue,
+                            _State(
+                                priority=float(st.depth + 1) + float(rng.uniform(0.05, 0.5)),
+                                pos=nxt,
+                                direction=bdir,
+                                block_idx=active_block_idx,
+                                depth=st.depth + 1,
+                                lineage_id=(f"{st.lineage_id}.s{role_tag}{branch_enq + 1}" if st.lineage_id else f"b{active_block_idx}.s{role_tag}{branch_enq+1}"),
+                                parent_lineage_id=(st.lineage_id or None),
+                                from_major_portal=False,
+                                branch_role="sub_local_connector",
+                                next_sub_branch_trigger_m=float("inf"),
+                                local_touch_count=0,
+                            ),
+                        )
+                        branch_enq += 1
+                    st.next_sub_branch_trigger_m = float(st.next_sub_branch_trigger_m + _sample_sub_branch_trigger_distance())
 
             # Stream local trace growth (throttled) so frontend can show live local-road generation.
             if (step_idx % 2) == 0:
@@ -934,13 +1156,20 @@ def generate_classic_local_fill(
                                 lineage_id=(f"{st.lineage_id}.b{branch_enq + 1}" if st.lineage_id else f"b{active_block_idx}.d{st.depth+1}.{branch_enq+1}"),
                                 parent_lineage_id=(st.lineage_id or None),
                                 from_major_portal=bool(st.from_major_portal),
+                                branch_role="fill_branch",
+                                next_sub_branch_trigger_m=float("inf"),
+                                local_touch_count=0,
                             ),
                         )
                         branch_enq += 1
 
             if total_len >= float(cfg.local_classic_min_trace_len_m):
+                if branch_role == "mainline" and total_len >= float(local_trace_hard_cap_m):
+                    trace_reached_cap = True
+                    reason = "max_len"
+                    break
                 if persistent_mainline:
-                    if total_len >= max(trace_soft_cap_this, float(extent_m) * 2.2):
+                    if total_len >= max(trace_soft_cap_this, min(float(local_trace_hard_cap_m), float(extent_m) * 6.5)):
                         reason = "max_len"
                         break
                 else:
@@ -968,6 +1197,8 @@ def generate_classic_local_fill(
                         break
             if (not persistent_mainline) and total_len >= trace_soft_cap_this:
                 reason = "max_len"
+                if branch_role == "mainline" and total_len >= float(local_trace_hard_cap_m) - max(step_m * 1.5, 12.0):
+                    trace_reached_cap = True
                 break
 
         if len(pts) >= 2 and pts[-1].distance_to(pts[-2]) <= 1e-6:
@@ -977,11 +1208,19 @@ def generate_classic_local_fill(
         if _polyline_length(pts) < float(cfg.local_classic_min_trace_len_m):
             continue
         # local streets can be semi-disconnected visually inside blocks, but prefer some network relation.
-        if connected < 1:
+        if connected_network_count < 1:
             d_end, _ = _nearest_road_distance_and_projection(pts[-1], base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
             if d_end < max(junction_probe * 2.5, 24.0):
-                connected = 1
-        if connected < 1 and len(runtime_segments) > 0 and (not bool(getattr(cfg, "local_allow_disconnected_accept", False))):
+                connected_network_count = 1
+        local_contact_segments_final = list(existing_local_segments) + list(runtime_segments)
+        if connected_local_count < 1 and local_contact_segments_final:
+            d_end_local, _ = _nearest_road_distance_and_projection(pts[-1], local_contact_segments_final)
+            if d_end_local < max(junction_probe * 2.5, 24.0):
+                connected_local_count = 1
+                local_touch_count_total += 1
+                if branch_role == "sub_local_connector":
+                    local_sub_branch_connector_touch_count += 1
+        if connected_network_count < 1 and len(runtime_segments) > 0 and (not bool(getattr(cfg, "local_allow_disconnected_accept", False))):
             continue
 
         traces.append(pts)
@@ -1001,11 +1240,23 @@ def generate_classic_local_fill(
         d_col_start, _ = _nearest_road_distance_and_projection(pts[0], collector_segments) if collector_segments else (float("inf"), None)
         connected_to_collector = bool(min(d_col_start, d_col_end) < max(junction_probe * 2.0, 26.0))
         trace_len = _polyline_length(pts)
+        if trace_len >= float(local_trace_hard_cap_m) - max(step_m * 1.5, 12.0):
+            local_trace_over_6km_count += 1
+        if bool(trace_reached_cap):
+            local_trace_reached_cap_count += 1
         is_spine_candidate = bool(
             (not cul)
             and st.depth <= 1
             and trace_len >= max(float(cfg.local_classic_min_trace_len_m) * 1.35, 72.0)
         )
+        is_overlimit_unconnected_candidate = bool(
+            branch_role == "mainline"
+            and trace_reached_cap
+            and trace_len >= float(local_trace_hard_cap_m) - max(step_m * 1.5, 12.0)
+            and connected_local_count <= 0
+        )
+        if is_overlimit_unconnected_candidate:
+            local_trace_overlimit_unconnected_count += 1
         trace_meta.append(
             LocalTraceMeta(
                 block_idx=int(active_block_idx),
@@ -1015,11 +1266,19 @@ def generate_classic_local_fill(
                 depth=int(st.depth),
                 trace_lineage_id=(st.lineage_id or None),
                 parent_trace_lineage_id=(st.parent_lineage_id or None),
+                branch_role=branch_role,
+                trace_len_m=float(trace_len),
+                local_touch_count=int(connected_local_count),
+                reached_trace_cap=bool(trace_reached_cap),
+                terminal_stop_reason=str(reason),
+                is_overlimit_unconnected_candidate=bool(is_overlimit_unconnected_candidate),
             )
         )
         if cul:
             cul_count += 1
         runtime_segments.extend(_polyline_segments(pts))
+        runtime_local_endpoints.append((pts[0], st.lineage_id or None))
+        runtime_local_endpoints.append((pts[-1], st.lineage_id or None))
         per_block_counts[st.block_idx] += 1
         stop_reasons[reason] = stop_reasons.get(reason, 0) + 1
         accepted_trace_lengths.append(float(trace_len))
@@ -1049,6 +1308,8 @@ def generate_classic_local_fill(
     short_count = sum(1 for v in accepted_trace_lengths if v < trace_target_min_m)
     band_count = sum(1 for v in accepted_trace_lengths if trace_target_min_m <= v <= trace_target_max_m)
     long_count = sum(1 for v in accepted_trace_lengths if v > trace_target_max_m)
+    over_1km_count = sum(1 for v in accepted_trace_lengths if v > 1000.0)
+    over_3km_count = sum(1 for v in accepted_trace_lengths if v > 3000.0)
     cul_short_count = sum(1 for v, cul in zip(accepted_trace_lengths, accepted_trace_cul_flags) if cul and v < trace_target_min_m)
     cul_total = sum(1 for cul in accepted_trace_cul_flags if cul)
     nonexception_idx: list[int] = []
@@ -1073,11 +1334,27 @@ def generate_classic_local_fill(
             f"p50={int(round(trace_len_p50))},p90={int(round(trace_len_p90))},p99={int(round(trace_len_p99))}"
         )
         notes.append(
+            "local_classic_long_trace_rates:"
+            f">1km={over_1km_count/len(accepted_trace_lengths):.2f},"
+            f">3km={over_3km_count/len(accepted_trace_lengths):.2f},"
+            f"reached_6km={local_trace_over_6km_count/len(accepted_trace_lengths):.2f}"
+        )
+        notes.append(
             "local_classic_trace_target_rates:"
             f"short={short_count/len(accepted_trace_lengths):.2f},"
             f"band={band_count/len(accepted_trace_lengths):.2f},"
             f"long={long_count/len(accepted_trace_lengths):.2f}"
         )
+    if local_sub_branch_trigger_count > 0:
+        notes.append(
+            "local_classic_sub_branches_200_400m:"
+            f"triggers={int(local_sub_branch_trigger_count)},"
+            f"left={int(local_sub_branch_left_spawn_count)},"
+            f"right={int(local_sub_branch_right_spawn_count)},"
+            f"connector_touches={int(local_sub_branch_connector_touch_count)}"
+        )
+    if local_trace_overlimit_unconnected_count > 0:
+        notes.append(f"local_classic_overlimit_unconnected_traces:{int(local_trace_overlimit_unconnected_count)}")
     if nonexception_lengths:
         notes.append(
             "local_classic_trace_nonexception_band_rate:"
@@ -1092,9 +1369,15 @@ def generate_classic_local_fill(
         "local_classic_trace_len_p50_m": float(trace_len_p50),
         "local_classic_trace_len_p90_m": float(trace_len_p90),
         "local_classic_trace_len_p99_m": float(trace_len_p99),
+        "local_classic_long_trace_cap_m": float(local_trace_hard_cap_m),
         "local_classic_trace_short_rate": float(short_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
         "local_classic_trace_target_band_rate": float(band_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
         "local_classic_trace_long_rate": float(long_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
+        "local_classic_trace_over_1km_rate": float(over_1km_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
+        "local_classic_trace_over_3km_rate": float(over_3km_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
+        "local_classic_trace_over_6km_count": float(local_trace_over_6km_count),
+        "local_classic_trace_reached_cap_count": float(local_trace_reached_cap_count),
+        "local_classic_trace_overlimit_unconnected_count": float(local_trace_overlimit_unconnected_count),
         "local_classic_trace_culdesac_short_rate": float(cul_short_count / cul_total) if cul_total > 0 else 0.0,
         "local_classic_trace_nonexception_target_band_rate": (
             float(nonexception_band_count / len(nonexception_lengths)) if nonexception_lengths else 0.0
@@ -1121,6 +1404,11 @@ def generate_classic_local_fill(
         "local_classic_major_repel_clearance_gain_avg_m": (
             float(major_repel_clearance_gain_sum_m / major_repel_apply_count) if major_repel_apply_count > 0 else 0.0
         ),
+        "local_classic_local_touch_count_total": float(local_touch_count_total),
+        "local_classic_sub_branch_trigger_count": float(local_sub_branch_trigger_count),
+        "local_classic_sub_branch_left_spawn_count": float(local_sub_branch_left_spawn_count),
+        "local_classic_sub_branch_right_spawn_count": float(local_sub_branch_right_spawn_count),
+        "local_classic_sub_branch_connector_touch_count": float(local_sub_branch_connector_touch_count),
     }
     # Promote stop-reason diagnostics to numeric metrics so callers can track
     # coverage regressions without parsing notes strings.

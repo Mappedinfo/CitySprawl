@@ -71,6 +71,11 @@ UI 显示分组：
 - `local_blocks`: 由冻结几何预计算的 Local blocks
 - `river_union`: 缓存的河流联合几何
 
+说明（与 Local 连接策略相关）：
+- `local_blocks` 是 **major network 定义的生成域/裁剪域**，不是 local-local 连通的硬边界语义
+- 后续 local endpoint bridge（若启用）可跨 `local_blocks` 配对端点，只要地形/河流/A* 代价约束允许
+- 也就是说：major 冻结负责给 local 提供稳定 blocks，但不应阻止 local 网络在后处理阶段做跨 block 的连通补救
+
 冻结发生在 Phase 1 完成后，此时：
 - Collector 已经过 intersection operators 和 syntax postprocess
 - 低度数 Collector 已被删除
