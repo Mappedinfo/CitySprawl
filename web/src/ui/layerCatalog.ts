@@ -46,7 +46,7 @@ export const LAYER_LABELS: Record<LayerKey, string> = {
   terrain: 'Terrain',
   rivers: 'Rivers',
   majorRoads: 'Major Roads',
-  localRoads: 'Local Roads',
+  localRoads: 'Minor Local Roads',
   contours: 'Contours',
   blocks: 'Blocks',
   parcels: 'Parcels',

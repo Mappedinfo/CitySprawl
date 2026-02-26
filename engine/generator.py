@@ -354,10 +354,12 @@ def _generate_core_context(
     _emit_progress(progress_cb, "roads", 0.36, "Generating road network")
 
     roads_cfg = config.roads
-    collector_generator_value = str(getattr(roads_cfg, "collector_generator", "classic_turtle"))
-    # If legacy tensor_streamline was requested, silently map to classic_turtle
-    if collector_generator_value.lower() == "tensor_streamline":
-        collector_generator_value = "classic_turtle"
+    collector_generator_value = str(getattr(roads_cfg, "collector_generator", "turtle_flow"))
+    # Normalize legacy aliases at generator level (also done in model_validator)
+    if collector_generator_value in {"classic_turtle", "tensor_streamline"}:
+        collector_generator_value = "turtle_flow"
+    # Backend mapping: network.py still expects "classic_turtle" internally
+    backend_collector_generator = "classic_turtle" if collector_generator_value == "turtle_flow" else collector_generator_value
 
     road_progress_cb = _progress_subrange(progress_cb, 0.36, 0.78)
 
@@ -416,7 +418,7 @@ def _generate_core_context(
         river_setback_m=roads_cfg.river_setback_m,
         minor_bridge_budget=roads_cfg.minor_bridge_budget,
         max_local_block_area_m2=roads_cfg.max_local_block_area_m2,
-        collector_generator=collector_generator_value,
+        collector_generator=backend_collector_generator,
         classic_probe_step_m=roads_cfg.classic_probe_step_m,
         classic_seed_spacing_m=roads_cfg.classic_seed_spacing_m,
         classic_max_trace_len_m=roads_cfg.classic_max_trace_len_m,
@@ -446,6 +448,12 @@ def _generate_core_context(
         syntax_choice_radius_hops=roads_cfg.syntax_choice_radius_hops,
         syntax_prune_low_choice_collectors=roads_cfg.syntax_prune_low_choice_collectors,
         syntax_prune_quantile=roads_cfg.syntax_prune_quantile,
+        enable_legacy_branches=getattr(roads_cfg, 'enable_legacy_branches', False),
+        local_minor_run_hard_cap_m=getattr(roads_cfg, 'local_minor_run_hard_cap_m', 6000.0),
+        local_sub_branch_interval_min_m=getattr(roads_cfg, 'local_sub_branch_interval_min_m', 200.0),
+        local_sub_branch_interval_max_m=getattr(roads_cfg, 'local_sub_branch_interval_max_m', 400.0),
+        local_sub_branch_max_depth=getattr(roads_cfg, 'local_sub_branch_max_depth', 2),
+        local_sub_branch_connector_seek_radius_m=getattr(roads_cfg, 'local_sub_branch_connector_seek_radius_m', 1200.0),
         river_areas=river_areas,
         progress_cb=_road_progress_canonical if road_progress_cb is not None else None,
         stream_cb=stream_cb,
@@ -595,13 +603,13 @@ def _build_city_artifact_from_core(
     if ctx.river_area_clipped_ratio < 0.6:
         metric_notes.append("River buffer geometry was heavily clipped to study boundary.")
     if float(metric_values.get("collector_generator_classic_turtle", 0.0)) > 0.5:
-        metric_notes.append("Collector generator: classic_turtle")
+        metric_notes.append("Major Local generator: turtle_flow")
     elif float(metric_values.get("collector_generator_tensor_streamline", 0.0)) > 0.5:
-        metric_notes.append("Collector generator: classic_turtle")
+        metric_notes.append("Major Local generator: turtle_flow")
     elif float(metric_values.get("collector_generator_grid_clip", 0.0)) > 0.5:
-        metric_notes.append("Collector generator: grid_clip")
+        metric_notes.append("Major Local generator: grid_clip")
     if float(metric_values.get("collector_generator_degraded", 0.0)) > 0.5:
-        metric_notes.append("Collector generator degraded to grid_clip")
+        metric_notes.append("Major Local generator degraded to grid_clip")
     trace_count = int(
         metric_values.get(
             "collector_classic_trace_count",
@@ -801,7 +809,7 @@ def _build_city_artifact_from_core(
             f"(ratio={float(metric_values.get('local_culdesac_preserved_ratio', 0.0)):.2f})"
         )
     if float(metric_values.get("syntax_enabled", 0.0)) > 0.5:
-        metric_notes.append(f"Space syntax postprocess enabled (pruned={int(metric_values.get('syntax_pruned_count', 0.0))})")
+        metric_notes.append("Space syntax width guidance enabled")
 
     metrics = Metrics(
         hub_count=len(hubs),
@@ -910,6 +918,18 @@ def _build_city_artifact_from_core(
             metric_values.get("local_classic_contact_oblique_continue_count", 0.0)
         )
         if "local_classic_contact_oblique_continue_count" in metric_values
+        else None,
+        minor_local_run_count=int(metric_values.get("local_classic_trace_count", 0.0))
+        if "local_classic_trace_count" in metric_values
+        else None,
+        minor_local_run_generator_enabled=float(metric_values.get("local_generator_classic_sprawl", 0.0))
+        if "local_generator_classic_sprawl" in metric_values
+        else None,
+        minor_local_continuity_group_count=int(metric_values.get("local_continuity_group_count", 0.0))
+        if "local_continuity_group_count" in metric_values
+        else None,
+        minor_local_edges_with_continuity_count=int(metric_values.get("local_edges_with_continuity_count", 0.0))
+        if "local_edges_with_continuity_count" in metric_values
         else None,
         generation_profile=str(getattr(config.quality, "profile", "balanced")),
         degraded_mode=False,

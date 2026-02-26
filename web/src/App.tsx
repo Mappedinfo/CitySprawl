@@ -42,7 +42,7 @@ const defaultConfig: GenerateConfig = {
   extent_m: 10000,
   grid_resolution: 256,
   quality: { profile: 'balanced', time_budget_ms: 15000 },
-  terrain: { noise_octaves: 5, relief_strength: 1 },
+  terrain: { noise_octaves: 2, relief_strength: 0.12 },
   hydrology: {
     enable: true,
     accum_threshold: 0.015,
@@ -67,6 +67,8 @@ const defaultConfig: GenerateConfig = {
     river_setback_m: 18,
     minor_bridge_budget: 4,
     max_local_block_area_m2: 180000,
+    enable_legacy_branches: false,
+    collector_generator: 'turtle_flow',
   },
   parcels: {
     enable: true,

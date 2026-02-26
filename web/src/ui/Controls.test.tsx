@@ -12,7 +12,7 @@ const testConfig: GenerateConfig = {
   extent_m: 10000,
   grid_resolution: 256,
   quality: { profile: 'balanced', time_budget_ms: 15000 },
-  terrain: { noise_octaves: 5, relief_strength: 1 },
+  terrain: { noise_octaves: 2, relief_strength: 0.12 },
   hydrology: {
     enable: true,
     accum_threshold: 0.015,
@@ -117,7 +117,7 @@ describe('Controls layers groups', () => {
       'Buildings',
       'Green Zones',
       'Major Roads',
-      'Local Roads',
+      'Minor Local Roads',
       'Ped Paths',
       'Candidate Edges',
       'Traffic Heat',
@@ -138,7 +138,7 @@ describe('Controls layers groups', () => {
     const scoped = within(lineGroup as HTMLElement);
 
     const majorRoadsItem = scoped.getByLabelText('Major Roads').closest('.layer-item');
-    const localRoadsItem = scoped.getByLabelText('Local Roads').closest('.layer-item');
+    const localRoadsItem = scoped.getByLabelText('Minor Local Roads').closest('.layer-item');
 
     expect(scoped.queryByLabelText('Roads')).not.toBeInTheDocument();
     expect(majorRoadsItem).toBeInTheDocument();
@@ -214,7 +214,7 @@ describe('Controls layers groups', () => {
 
     const scoped = within(lineGroup);
     expect(scoped.getByLabelText('Major Roads').closest('.layer-item')).toHaveClass('is-active-generating');
-    expect(scoped.getByLabelText('Local Roads').closest('.layer-item')).toHaveClass('is-active-generating');
+    expect(scoped.getByLabelText('Minor Local Roads').closest('.layer-item')).toHaveClass('is-active-generating');
     expect(scoped.getByLabelText('Candidate Edges').closest('.layer-item')).toHaveClass('is-active-generating');
   });
 });

@@ -294,6 +294,7 @@ def _load_staged_json(path_str: str) -> StagedCityResponse:
 def _default_preset() -> GenerateConfig:
     return GenerateConfig(
         quality={"profile": "balanced", "time_budget_ms": 15000},
+        terrain={"noise_octaves": 2, "relief_strength": 0.12},
         hydrology={
             "enable": True,
             "accum_threshold": 0.015,

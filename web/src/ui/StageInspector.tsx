@@ -53,12 +53,12 @@ const STAGE_GUIDE_BLURBS: Record<CanonicalStageId, { zh: string; en: string }> =
     en: 'Generate arterial backbone and clean intersections to establish the primary network.',
   },
   roads_collector: {
-    zh: '多海龟生长次干道网络，冻结主干网快照。',
-    en: 'Grow collector roads via multi-turtle expansion and freeze major network snapshot.',
+    zh: '多海龟生长主支路网络，冻结主干网快照。',
+    en: 'Grow major local roads via multi-turtle expansion and freeze major network snapshot.',
   },
   roads_local: {
-    zh: '填充地方道路并统一运行空间句法后处理。',
-    en: 'Fill local roads and run unified space-syntax postprocessing.',
+    zh: '填充次支路并统一运行空间句法后处理。',
+    en: 'Fill minor local roads and run unified space-syntax postprocessing.',
   },
   artifact: {
     zh: '封装核心城市骨架与预览产物，为后续分析阶段提供输入。',

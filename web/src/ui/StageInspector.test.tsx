@@ -68,8 +68,8 @@ describe('StageInspector', () => {
       />,
     );
 
-    expect(screen.getAllByText('次干道').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Collector Roads').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('主支路').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Major Local Roads').length).toBeGreaterThan(0);
     expect(screen.getByText('Froze Major Network geometry')).toBeInTheDocument();
   });
 
@@ -84,7 +84,7 @@ describe('StageInspector', () => {
             status: 'running',
             progress: 0.58,
             phase: 'roads_local.generation',
-            message: 'Filling blocks with local street network',
+            message: 'Filling blocks with minor local network',
             logs: [],
           },
           backendSteps: [
@@ -96,9 +96,9 @@ describe('StageInspector', () => {
       />,
     );
 
-    expect(screen.getAllByText('本地道路').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Local Roads').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Filling blocks with local street network').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('次支路').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Minor Local Roads').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Filling blocks with minor local network').length).toBeGreaterThan(0);
   });
 
   it('renders staged artifact info in replay mode', () => {

@@ -51,6 +51,47 @@ def _edge_pairs(edges: Sequence[object]) -> Dict[Tuple[str, str], List[object]]:
     return out
 
 
+def _collect_target_edges_for_scoring(
+    edges: Sequence[object],
+    *,
+    target_classes: Optional[Set[str]] = None,
+) -> list[object]:
+    target_set = set(str(c).lower() for c in target_classes) if target_classes else {"arterial", "collector"}
+    out: list[object] = []
+    for e in edges:
+        rc = str(getattr(e, "road_class", "")).lower()
+        if rc in target_set:
+            out.append(e)
+    return out
+
+
+def _build_syntax_background_graph(nodes: Sequence[object], edges: Sequence[object]):
+    """Build routing background graph for syntax using all motorized classes."""
+    try:
+        import networkx as nx  # type: ignore
+    except Exception:
+        return None
+
+    g = nx.Graph()
+    for n in nodes:
+        g.add_node(str(getattr(n, "id")))
+
+    bg_classes = {"arterial", "collector", "local"}
+    for e in edges:
+        rc = str(getattr(e, "road_class", "")).lower()
+        if rc not in bg_classes:
+            continue
+        u = str(getattr(e, "u"))
+        v = str(getattr(e, "v"))
+        w = float(getattr(e, "length_m", 1.0) or 1.0)
+        if g.has_edge(u, v):
+            if w < float(g[u][v].get("weight", w)):
+                g[u][v]["weight"] = w
+            continue
+        g.add_edge(u, v, weight=w)
+    return g
+
+
 def _largest_component_ratio(edges: Sequence[object], nodes: Sequence[object]) -> float:
     if not nodes:
         return 1.0
@@ -89,38 +130,18 @@ def compute_space_syntax_edge_scores(
 ) -> tuple[Dict[str, float], list[str]]:
     _ = choice_radius_hops  # first-pass uses global choice for simplicity
     notes: list[str] = []
-    # Determine which classes to score
-    score_set = set(str(c).lower() for c in target_classes) if target_classes else {"arterial", "collector"}
-    syntax_edges = [e for e in edges if str(getattr(e, "road_class", "")) in score_set]
+    syntax_edges = _collect_target_edges_for_scoring(edges, target_classes=target_classes)
     if not syntax_edges:
         notes.append("syntax:no_candidate_edges")
         return {}, notes
 
-    try:
-        import networkx as nx  # type: ignore
-    except Exception:
+    g = _build_syntax_background_graph(nodes, edges)
+    if g is None:
         notes.append("syntax:degraded_no_networkx")
         return {}, notes
 
-    # Build graph from ALL motorized edges (arterial + collector + local) as routing background
-    g = nx.Graph()
-    for n in nodes:
-        g.add_node(str(getattr(n, "id")))
-    bg_classes = {"arterial", "collector", "local"}
-    for e in edges:
-        rc = str(getattr(e, "road_class", "")).lower()
-        if rc not in bg_classes:
-            continue
-        u = str(getattr(e, "u"))
-        v = str(getattr(e, "v"))
-        w = float(getattr(e, "length_m", 1.0) or 1.0)
-        if g.has_edge(u, v):
-            if w < float(g[u][v].get("weight", w)):
-                g[u][v]["weight"] = w
-            continue
-        g.add_edge(u, v, weight=w)
-
     try:
+        import networkx as nx  # type: ignore
         pair_scores = nx.edge_betweenness_centrality(g, normalized=True, weight="weight")
     except Exception:
         notes.append("syntax:degraded_betweenness_failed")
@@ -146,6 +167,64 @@ def compute_space_syntax_edge_scores(
     return out, notes
 
 
+def apply_width_guidance_postprocess(
+    nodes: Sequence[object],
+    edges: list[object],
+    *,
+    syntax_enable: bool,
+    choice_radius_hops: int,
+    target_classes: Optional[Set[str]] = None,
+) -> tuple[list[object], list[str], dict[str, float]]:
+    """Apply syntax-derived width guidance without changing topology."""
+    notes: list[str] = []
+    numeric: dict[str, float] = {
+        "syntax_enabled": 0.0,
+        "syntax_pruned_count": 0.0,
+        "syntax_scored_edge_count": 0.0,
+    }
+    if not syntax_enable:
+        notes.append("syntax:disabled")
+        return list(edges), notes, numeric
+
+    if target_classes is not None:
+        target_set = set(str(c).lower() for c in target_classes)
+        notes.append(f"syntax_target_classes:{','.join(sorted(target_set))}")
+    else:
+        target_set = {"arterial", "collector"}
+
+    scores, score_notes = compute_space_syntax_edge_scores(
+        nodes, edges, choice_radius_hops=choice_radius_hops, target_classes=target_set,
+    )
+    notes.extend(score_notes)
+    if not scores:
+        return list(edges), notes, numeric
+
+    numeric["syntax_enabled"] = 1.0
+    numeric["syntax_scored_edge_count"] = float(len(scores))
+
+    raw_scores = np.asarray(list(scores.values()), dtype=np.float64)
+    high = float(np.quantile(raw_scores, 0.85))
+    low = float(np.quantile(raw_scores, 0.15))
+    out = list(edges)
+    for i, e in enumerate(out):
+        rc = str(getattr(e, "road_class", "")).lower()
+        if rc != "collector":
+            continue
+        if rc not in target_set:
+            continue
+        score = float(scores.get(str(getattr(e, "id")), 0.0))
+        width = float(getattr(e, "width_m", 11.0))
+        if score >= high:
+            width = 11.0 + min(2.0, 2.0 * ((score - high) / max(1e-6, 1.0 - high)))
+        elif score <= low:
+            # Low-choice collectors remain in topology; only de-emphasize width slightly.
+            width = max(9.0, min(width, 10.0))
+        out[i] = _rebuild_edge_like(e, width_m=float(width))
+
+    notes.append("syntax:width_guidance_only")
+    return out, notes, numeric
+
+
 def apply_syntax_postprocess(
     nodes: Sequence[object],
     edges: list[object],
@@ -156,126 +235,16 @@ def apply_syntax_postprocess(
     prune_quantile: float,
     target_classes: Optional[Set[str]] = None,
 ) -> tuple[list[object], list[str], dict[str, float]]:
-    """Apply space syntax postprocessing to road edges.
-    
-    Args:
-        nodes: Sequence of road nodes.
-        edges: List of road edges.
-        syntax_enable: Whether to enable syntax processing.
-        choice_radius_hops: Radius in hops for choice calculation.
-        prune_low_choice_collectors: Whether to prune low-choice collectors.
-        prune_quantile: Quantile threshold for pruning.
-        target_classes: Optional set of road classes to score and prune/adjust.
-            The betweenness graph always includes all motorized edges (arterial +
-            collector + local) as routing background, but only edges in target_classes
-            receive scores and are eligible for pruning/width changes.
-    
-    Returns:
-        Tuple of (edges, notes, numeric).
-    """
-    notes: list[str] = []
-    numeric: dict[str, float] = {
-        "syntax_enabled": 0.0,
-        "syntax_pruned_count": 0.0,
-        "syntax_scored_edge_count": 0.0,
-    }
-    if not syntax_enable:
-        notes.append("syntax:disabled")
-        return edges, notes, numeric
-
-    # Determine which classes to process
-    if target_classes is not None:
-        target_set = set(str(c).lower() for c in target_classes)
-        notes.append(f"syntax_target_classes:{','.join(sorted(target_set))}")
-    else:
-        target_set = {"arterial", "collector"}  # default behavior
-
-    scores, score_notes = compute_space_syntax_edge_scores(
-        nodes, edges, choice_radius_hops=choice_radius_hops, target_classes=target_set,
+    """Deprecated compatibility wrapper; topology pruning is no longer applied."""
+    _ = prune_quantile
+    notes = ["syntax:deprecated_apply_syntax_postprocess"]
+    if prune_low_choice_collectors:
+        notes.append("syntax:prune_deprecated_ignored")
+    out, inner_notes, numeric = apply_width_guidance_postprocess(
+        nodes=nodes,
+        edges=edges,
+        syntax_enable=syntax_enable,
+        choice_radius_hops=choice_radius_hops,
+        target_classes=target_classes,
     )
-    notes.extend(score_notes)
-    if not scores:
-        return edges, notes, numeric
-
-    numeric["syntax_enabled"] = 1.0
-    numeric["syntax_scored_edge_count"] = float(len(scores))
-
-    # Width emphasis for high-choice collectors.
-    if scores:
-        high = np.quantile(np.asarray(list(scores.values()), dtype=np.float64), 0.85)
-        for i, e in enumerate(edges):
-            rc = str(getattr(e, "road_class", "")).lower()
-            if rc != "collector":
-                continue
-            # Only process if collector is in target classes
-            if target_classes is not None and rc not in target_set:
-                continue
-            score = float(scores.get(str(getattr(e, "id")), 0.0))
-            if score <= float(high):
-                continue
-            width = 11.0 + min(2.0, 2.0 * ((score - float(high)) / max(1e-6, 1.0 - float(high))))
-            edges[i] = _rebuild_edge_like(e, width_m=float(width))
-
-    if not prune_low_choice_collectors:
-        return edges, notes, numeric
-
-    # Only prune collectors if they are in target classes
-    if target_classes is not None and "collector" not in target_set:
-        notes.append("syntax:collector_not_in_target_classes")
-        return edges, notes, numeric
-
-    collector_scores = [float(scores.get(str(getattr(e, "id")), 0.0)) for e in edges if str(getattr(e, "road_class", "")) == "collector"]
-    if not collector_scores:
-        notes.append("syntax:no_collectors_to_prune")
-        return edges, notes, numeric
-    thresh = float(np.quantile(np.asarray(collector_scores, dtype=np.float64), max(0.0, min(0.99, prune_quantile))))
-
-    base_ratio = _largest_component_ratio(edges, nodes)
-    if base_ratio <= 0.0:
-        base_ratio = 1.0
-
-    def degrees(cur_edges: Sequence[object]) -> Dict[str, int]:
-        d: Dict[str, int] = Counter()
-        for e in cur_edges:
-            d[str(getattr(e, "u"))] += 1
-            d[str(getattr(e, "v"))] += 1
-        return d
-
-    cur = list(edges)
-    initial_collector_count = sum(1 for e in cur if str(getattr(e, "road_class", "")) == "collector")
-    min_collectors_to_keep = max(1, int(np.ceil(initial_collector_count * 0.15))) if initial_collector_count > 0 else 0
-    pruned = 0
-    changed = True
-    while changed:
-        changed = False
-        collector_count = sum(1 for e in cur if str(getattr(e, "road_class", "")) == "collector")
-        if collector_count <= min_collectors_to_keep:
-            break
-        deg = degrees(cur)
-        cands = []
-        for idx, e in enumerate(cur):
-            if str(getattr(e, "road_class", "")) != "collector":
-                continue
-            score = float(scores.get(str(getattr(e, "id")), 0.0))
-            if score > thresh:
-                continue
-            if max(deg.get(str(getattr(e, "u")), 0), deg.get(str(getattr(e, "v")), 0)) > 2:
-                continue
-            cands.append((score, idx))
-        for _, idx in cands:
-            collector_count = sum(1 for e in cur if str(getattr(e, "road_class", "")) == "collector")
-            if collector_count <= min_collectors_to_keep:
-                break
-            test_edges = [e for j, e in enumerate(cur) if j != idx]
-            ratio = _largest_component_ratio(test_edges, nodes)
-            if ratio + 0.02 < base_ratio:
-                continue
-            cur = test_edges
-            pruned += 1
-            changed = True
-            break
-
-    if pruned > 0:
-        notes.append(f"syntax:pruned_collectors:{pruned}")
-    numeric["syntax_pruned_count"] = float(pruned)
-    return cur, notes, numeric
+    return out, notes + inner_notes, numeric

@@ -41,6 +41,8 @@ class LocalClassicFillConfig:
     local_classic_probe_step_m: float = 18.0
     local_classic_seed_spacing_m: float = 110.0
     local_classic_max_trace_len_m: float = 6000.0
+    # Preferred user-facing name: Minor Local Run hard cap. Keep legacy trace cap for compatibility.
+    local_minor_run_hard_cap_m: float = 6000.0
     local_classic_min_trace_len_m: float = 48.0
     local_classic_turn_limit_deg: float = 54.0
     local_classic_branch_prob: float = 0.62
@@ -96,6 +98,9 @@ class LocalTraceMeta:
     depth: int = 0
     trace_lineage_id: Optional[str] = None
     parent_trace_lineage_id: Optional[str] = None
+    minor_local_continuity_id: Optional[str] = None
+    parent_minor_local_continuity_id: Optional[str] = None
+    seed_origin: str = "major_portal_seed"
     branch_role: str = "mainline"
     trace_len_m: float = 0.0
     local_touch_count: int = 0
@@ -700,7 +705,10 @@ def generate_classic_local_fill(
         float(cfg.local_classic_min_trace_len_m) * 2.0,
         float(getattr(cfg, "local_sub_branch_length_cap_m", 1800.0) or 1800.0),
     )
-    local_trace_hard_cap_m = max(float(cfg.local_classic_min_trace_len_m) + 1.0, float(cfg.local_classic_max_trace_len_m))
+    local_trace_hard_cap_m = max(
+        float(cfg.local_classic_min_trace_len_m) + 1.0,
+        float(getattr(cfg, "local_minor_run_hard_cap_m", cfg.local_classic_max_trace_len_m) or cfg.local_classic_max_trace_len_m),
+    )
     major_segments = higher_order_segments
     major_repel_influence_radius_m = max(local_spacing_m * 1.15, 140.0)
     major_repel_max_samples = 12
@@ -1266,6 +1274,13 @@ def generate_classic_local_fill(
                 depth=int(st.depth),
                 trace_lineage_id=(st.lineage_id or None),
                 parent_trace_lineage_id=(st.parent_lineage_id or None),
+                minor_local_continuity_id=(st.lineage_id or None),
+                parent_minor_local_continuity_id=(st.parent_lineage_id or None),
+                seed_origin=(
+                    "sub_local_scheduler"
+                    if branch_role == "sub_local_connector"
+                    else ("major_portal_seed" if bool(getattr(st, "from_major_portal", False)) else "fallback_centroid_seed")
+                ),
                 branch_role=branch_role,
                 trace_len_m=float(trace_len),
                 local_touch_count=int(connected_local_count),
@@ -1300,6 +1315,7 @@ def generate_classic_local_fill(
         notes.append(f"local_classic_fallback_centroid_seeds:{int(fallback_centroid_seed_count)}")
     notes.append(f"local_classic_major_seed_spacing_range_m:{int(round(major_seed_spacing_min_m))}-{int(round(major_seed_spacing_max_m))}")
     notes.append(f"local_classic_trace_count:{len(traces)}")
+    notes.append(f"minor_local_run_count:{len(traces)}")
     if trace_cap_n > 0:
         notes.append(f"local_classic_avg_trace_cap_m:{int(round(trace_cap_sum / trace_cap_n))}")
     trace_len_p50 = _quantile(accepted_trace_lengths, 0.50)
@@ -1362,7 +1378,9 @@ def generate_classic_local_fill(
         )
     numeric = {
         "local_classic_enabled": 1.0,
+        "minor_local_run_generator_enabled": 1.0,
         "local_classic_trace_count": float(len(traces)),
+        "minor_local_run_count": float(len(traces)),
         "local_classic_culdesac_count": float(cul_count),
         "local_classic_branch_enqueued_count": float(branch_enq),
         "local_classic_avg_trace_cap_m": float(trace_cap_sum / trace_cap_n) if trace_cap_n > 0 else 0.0,
@@ -1370,6 +1388,7 @@ def generate_classic_local_fill(
         "local_classic_trace_len_p90_m": float(trace_len_p90),
         "local_classic_trace_len_p99_m": float(trace_len_p99),
         "local_classic_long_trace_cap_m": float(local_trace_hard_cap_m),
+        "local_minor_run_hard_cap_m": float(local_trace_hard_cap_m),
         "local_classic_trace_short_rate": float(short_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
         "local_classic_trace_target_band_rate": float(band_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,
         "local_classic_trace_long_rate": float(long_count / len(accepted_trace_lengths)) if accepted_trace_lengths else 0.0,

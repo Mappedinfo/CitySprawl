@@ -1638,6 +1638,11 @@ def _generate_hierarchy_linework(
     local_classic_max_segments_per_block: int,
     local_classic_max_road_distance_m: float,
     local_classic_depth_decay_power: float,
+    local_minor_run_hard_cap_m: float,
+    local_sub_branch_interval_min_m: float,
+    local_sub_branch_interval_max_m: float,
+    local_sub_branch_max_depth: int,
+    local_sub_branch_connector_seek_radius_m: float,
     local_community_seed_count_per_block: int,
     local_community_spine_prob: float,
     local_arterial_setback_weight: float,
@@ -1754,6 +1759,9 @@ def _generate_hierarchy_linework(
             # Deprecated alias kept for compatibility; use classic turtle generator.
             collector_backend = "classic_turtle"
             notes.append("collector_generator_alias:tensor_streamline->classic_turtle")
+        if collector_backend == "turtle_flow":
+            collector_backend = "classic_turtle"
+            notes.append("collector_generator_alias:turtle_flow->classic_turtle")
         if collector_backend not in {"classic_turtle", "grid_clip"}:
             collector_backend = "grid_clip"
             notes.append("collector_generator_degraded:grid_clip")
@@ -1999,10 +2007,15 @@ def _generate_hierarchy_linework(
                         local_classic_max_segments_per_block=local_classic_max_segments_per_block,
                         local_classic_max_road_distance_m=local_classic_max_road_distance_m,
                         local_classic_depth_decay_power=local_classic_depth_decay_power,
+                        local_minor_run_hard_cap_m=local_minor_run_hard_cap_m,
                         local_community_seed_count_per_block=local_community_seed_count_per_block,
                         local_community_spine_prob=local_community_spine_prob,
                         local_arterial_setback_weight=local_arterial_setback_weight,
                         local_collector_follow_weight=local_collector_follow_weight,
+                        local_sub_branch_interval_min_m=local_sub_branch_interval_min_m,
+                        local_sub_branch_interval_max_m=local_sub_branch_interval_max_m,
+                        local_sub_branch_max_depth=local_sub_branch_max_depth,
+                        local_sub_branch_connector_seek_radius_m=local_sub_branch_connector_seek_radius_m,
                         slope_straight_threshold_deg=slope_straight_threshold_deg,
                         slope_serpentine_threshold_deg=slope_serpentine_threshold_deg,
                         slope_hard_limit_deg=slope_hard_limit_deg,
@@ -2126,11 +2139,16 @@ def _generate_hierarchy_linework(
                     local_classic_max_segments_per_block=max(2, min(int(local_classic_max_segments_per_block), 8)),
                     local_classic_max_road_distance_m=local_classic_max_road_distance_m,
                     local_classic_depth_decay_power=local_classic_depth_decay_power,
+                    local_minor_run_hard_cap_m=local_minor_run_hard_cap_m,
                     local_community_seed_count_per_block=max(1, min(int(local_community_seed_count_per_block), 2)),
                     local_community_spine_prob=local_community_spine_prob,
                     local_arterial_setback_weight=local_arterial_setback_weight,
                     local_collector_follow_weight=local_collector_follow_weight,
                     local_allow_disconnected_accept=True,
+                    local_sub_branch_interval_min_m=local_sub_branch_interval_min_m,
+                    local_sub_branch_interval_max_m=local_sub_branch_interval_max_m,
+                    local_sub_branch_max_depth=local_sub_branch_max_depth,
+                    local_sub_branch_connector_seek_radius_m=local_sub_branch_connector_seek_radius_m,
                     slope_straight_threshold_deg=slope_straight_threshold_deg,
                     slope_serpentine_threshold_deg=slope_serpentine_threshold_deg,
                     slope_hard_limit_deg=slope_hard_limit_deg,
@@ -3056,6 +3074,7 @@ def generate_roads(
     slope_penalty: float,
     river_cross_penalty: float,
     seed: int,
+    enable_legacy_branches: bool = False,
     road_style: str = "skeleton",
     collector_spacing_m: float = 420.0,
     local_spacing_m: float = 130.0,
@@ -3087,6 +3106,11 @@ def generate_roads(
     local_classic_max_segments_per_block: int = 28,
     local_classic_max_road_distance_m: float = 500.0,
     local_classic_depth_decay_power: float = 1.5,
+    local_minor_run_hard_cap_m: float = 6000.0,
+    local_sub_branch_interval_min_m: float = 200.0,
+    local_sub_branch_interval_max_m: float = 400.0,
+    local_sub_branch_max_depth: int = 2,
+    local_sub_branch_connector_seek_radius_m: float = 1200.0,
     local_community_seed_count_per_block: int = 3,
     local_community_spine_prob: float = 0.28,
     local_arterial_setback_weight: float = 0.5,
@@ -3200,20 +3224,22 @@ def generate_roads(
             )
         )
 
+    legacy_phase1_branches_enabled = bool(enable_legacy_branches)
     t_phase = _phase_start()
-    _generate_branches(
-        hubs=hubs,
-        nodes=nodes,
-        edges=edges,
-        extent_m=extent_m,
-        slope=slope,
-        river_mask=river_mask,
-        branch_steps=branch_steps,
-        slope_penalty=slope_penalty,
-        river_cross_penalty=river_cross_penalty,
-        seed=seed,
-        stream_cb=stream_cb,
-    )
+    if legacy_phase1_branches_enabled:
+        _generate_branches(
+            hubs=hubs,
+            nodes=nodes,
+            edges=edges,
+            extent_m=extent_m,
+            slope=slope,
+            river_mask=river_mask,
+            branch_steps=branch_steps,
+            slope_penalty=slope_penalty,
+            river_cross_penalty=river_cross_penalty,
+            seed=seed,
+            stream_cb=stream_cb,
+        )
     _phase_end("road_phase_branches_ms", t_phase)
     _emit_road_progress(progress_cb, "roads.branches", 0.24, "Generated branch roads")
 
@@ -3277,6 +3303,11 @@ def generate_roads(
         local_classic_max_segments_per_block=local_classic_max_segments_per_block,
         local_classic_max_road_distance_m=local_classic_max_road_distance_m,
         local_classic_depth_decay_power=local_classic_depth_decay_power,
+        local_minor_run_hard_cap_m=local_minor_run_hard_cap_m,
+        local_sub_branch_interval_min_m=local_sub_branch_interval_min_m,
+        local_sub_branch_interval_max_m=local_sub_branch_interval_max_m,
+        local_sub_branch_max_depth=local_sub_branch_max_depth,
+        local_sub_branch_connector_seek_radius_m=local_sub_branch_connector_seek_radius_m,
         local_community_seed_count_per_block=local_community_seed_count_per_block,
         local_community_spine_prob=local_community_spine_prob,
         local_arterial_setback_weight=local_arterial_setback_weight,
@@ -3320,6 +3351,9 @@ def generate_roads(
     
     # ===== THREE-PHASE PIPELINE =====
     hierarchy_notes.append("pipeline:three_phase")
+    hierarchy_notes.append(
+        "legacy_phase1_branches:enabled" if legacy_phase1_branches_enabled else "legacy_phase1_branches:disabled"
+    )
     
     # --- Phase 1: Arterial intersection cleanup ---
     _emit_stream_event(stream_cb, {"event_type": "road_phase_start", "data": {"phase": "arterial"}})
@@ -3394,6 +3428,7 @@ def generate_roads(
     )
     hierarchy_notes.append(f"frozen_major_edges:{len(frozen_major.edges)}")
     hierarchy_notes.append(f"frozen_local_blocks:{len(frozen_major.local_blocks)}")
+    hierarchy_notes.append(f"transient_major_block_view_count:{len(frozen_major.local_blocks)}")
     _phase_end("road_phase_freeze_major_ms", t_phase_freeze)
     _emit_road_progress(progress_cb, "roads_collector.freeze", 0.58, "Froze Major Network geometry")
     _emit_stream_event(stream_cb, {"event_type": "road_phase_complete", "data": {"phase": "collector"}})
@@ -3438,19 +3473,19 @@ def generate_roads(
     # but only arterial + collector edges get pruned/width-emphasized.
     t_phase_syntax = _phase_start()
     try:
-        from engine.roads.syntax import apply_syntax_postprocess  # type: ignore
+        from engine.roads.syntax import apply_width_guidance_postprocess  # type: ignore
     except Exception:
         syntax_notes.append("syntax:degraded_unavailable")
     else:
-        edges, syntax_notes_result, syntax_numeric_result = apply_syntax_postprocess(
+        edges, syntax_notes_result, syntax_numeric_result = apply_width_guidance_postprocess(
             nodes=nodes,
             edges=edges,
             syntax_enable=bool(syntax_enable),
             choice_radius_hops=int(syntax_choice_radius_hops),
-            prune_low_choice_collectors=bool(syntax_prune_low_choice_collectors),
-            prune_quantile=float(syntax_prune_quantile),
             target_classes={"arterial", "collector"},
         )
+        if bool(syntax_prune_low_choice_collectors):
+            syntax_notes_result = ["syntax:prune_deprecated_ignored"] + list(syntax_notes_result)
         syntax_notes.extend(syntax_notes_result)
         syntax_numeric.update(syntax_numeric_result)
     _phase_end("road_phase_syntax_ms", t_phase_syntax)
@@ -3524,6 +3559,7 @@ def generate_roads(
     metrics["local_two_point_edge_ratio"] = float(local_two_point_count / len(local_edges_final)) if local_edges_final else 0.0
     # Encode textual notes in numeric flags/metrics-compatible shape; generator will translate to human notes.
     metrics["collector_generator_classic_turtle"] = float(1.0 if any("collector_generator:classic_turtle" == n for n in hierarchy_notes) else 0.0)
+    metrics["collector_generator_turtle_flow"] = float(metrics.get("collector_generator_classic_turtle", 0.0))
     metrics["collector_generator_tensor_streamline"] = float(1.0 if any("collector_generator:tensor_streamline" == n for n in hierarchy_notes) else 0.0)
     metrics["collector_generator_grid_clip"] = float(1.0 if any("collector_generator:grid_clip" == n for n in hierarchy_notes) else 0.0)
     metrics["collector_generator_degraded"] = float(1.0 if any("collector_generator_degraded" in n for n in hierarchy_notes) else 0.0)

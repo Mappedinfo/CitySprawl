@@ -3,7 +3,7 @@
   "extent_m": 2048,
   "grid_resolution": 256,
   "quality": {"profile": "balanced", "time_budget_ms": 15000},
-  "terrain": {"noise_octaves": 5, "relief_strength": 1.0},
+  "terrain": {"noise_octaves": 2, "relief_strength": 0.12},
   "hydrology": {
     "enable": true,
     "accum_threshold": 0.015,

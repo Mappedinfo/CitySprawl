@@ -87,6 +87,12 @@ export type GenerateConfig = {
     river_snap_dist_m?: number;
     river_parallel_bias_weight?: number;
     river_avoid_weight?: number;
+    enable_legacy_branches?: boolean;
+    local_minor_run_hard_cap_m?: number;
+    local_sub_branch_interval_min_m?: number;
+    local_sub_branch_interval_max_m?: number;
+    local_sub_branch_max_depth?: number;
+    local_sub_branch_connector_seek_radius_m?: number;
   };
   parcels: {
     enable: boolean;
@@ -238,6 +244,10 @@ export type CityArtifact = {
     local_reroute_avg_length_gain_ratio?: number;
     generation_profile?: string;
     degraded_mode?: boolean;
+    minor_local_run_count?: number;
+    minor_local_run_generator_enabled?: number;
+    minor_local_continuity_group_count?: number;
+    minor_local_edges_with_continuity_count?: number;
     notes: string[];
   };
   debug_layers: {

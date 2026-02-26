@@ -10,8 +10,8 @@ class StrictModel(BaseModel):
 
 
 class TerrainConfig(StrictModel):
-    noise_octaves: int = Field(default=5, ge=1, le=8)
-    relief_strength: float = Field(default=1.0, gt=0.0, le=5.0)
+    noise_octaves: int = Field(default=2, ge=1, le=8)
+    relief_strength: float = Field(default=0.12, gt=0.0, le=5.0)
 
 
 class HydrologyConfig(StrictModel):
@@ -39,6 +39,11 @@ class RoadsConfig(StrictModel):
             deprecated = [k for k in values if k.startswith("tensor_") or k == "use_two_phase_generation"]
             for k in deprecated:
                 values.pop(k)
+            # Normalize collector_generator legacy aliases to turtle_flow
+            if "collector_generator" in values:
+                cg = values["collector_generator"]
+                if cg in {"classic_turtle", "tensor_streamline"}:
+                    values["collector_generator"] = "turtle_flow"
         return values
 
     k_neighbors: int = Field(default=4, ge=2, le=12)
@@ -84,7 +89,7 @@ class RoadsConfig(StrictModel):
     river_setback_m: float = Field(default=18.0, ge=0.0, le=500.0)
     minor_bridge_budget: int = Field(default=4, ge=0, le=64)
     max_local_block_area_m2: float = Field(default=180000.0, ge=100.0)
-    collector_generator: str = Field(default="classic_turtle", min_length=1)
+    collector_generator: str = Field(default="turtle_flow", min_length=1)
     classic_probe_step_m: float = Field(default=24.0, gt=1.0, le=500.0)
     classic_seed_spacing_m: float = Field(default=260.0, gt=5.0, le=5000.0)
     classic_max_trace_len_m: float = Field(default=1800.0, gt=10.0, le=50000.0)
@@ -112,8 +117,14 @@ class RoadsConfig(StrictModel):
     min_dangle_length_m: float = Field(default=35.0, ge=0.0, le=1000.0)
     syntax_enable: bool = True
     syntax_choice_radius_hops: int = Field(default=10, ge=1, le=256)
-    syntax_prune_low_choice_collectors: bool = True
+    syntax_prune_low_choice_collectors: bool = False
     syntax_prune_quantile: float = Field(default=0.15, ge=0.0, le=0.99)
+    enable_legacy_branches: bool = False
+    local_minor_run_hard_cap_m: float = Field(default=6000.0, gt=10.0, le=50000.0)
+    local_sub_branch_interval_min_m: float = Field(default=200.0, gt=10.0, le=5000.0)
+    local_sub_branch_interval_max_m: float = Field(default=400.0, gt=10.0, le=5000.0)
+    local_sub_branch_max_depth: int = Field(default=2, ge=0, le=10)
+    local_sub_branch_connector_seek_radius_m: float = Field(default=1200.0, gt=10.0, le=10000.0)
 
 
 class QualityConfig(StrictModel):
@@ -354,6 +365,10 @@ class Metrics(StrictModel):
     local_classic_contact_parallel_count: Optional[int] = None
     local_classic_contact_perpendicular_continue_count: Optional[int] = None
     local_classic_contact_oblique_continue_count: Optional[int] = None
+    minor_local_run_count: Optional[int] = None
+    minor_local_run_generator_enabled: Optional[float] = None
+    minor_local_continuity_group_count: Optional[int] = None
+    minor_local_edges_with_continuity_count: Optional[int] = None
     generation_profile: str = "balanced"
     degraded_mode: bool = False
     notes: List[str] = Field(default_factory=list)
