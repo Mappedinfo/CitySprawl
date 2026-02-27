@@ -433,6 +433,8 @@ def generate_classic_local_fill(
     arterial_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"arterial"})
     existing_local_segments = _flatten_segments_from_edges(edges, nodes, road_classes={"minor_local"})
     higher_order_segments = list(arterial_segments) + list(collector_segments)
+    # Major-only segments for connectivity check (minor_local must connect to arterial or major_local)
+    major_only_segments = list(arterial_segments) + list(collector_segments)
     runtime_segments: list[Segment] = []
 
     queue: list[_State] = []
@@ -613,18 +615,10 @@ def generate_classic_local_fill(
             for sp, inward, _clearance in sorted(major_seed_portal_by_block[bi], key=lambda item: -float(item[2])):
                 seeds.append((sp, inward, True))
         if not seeds:
-            # Fallback for blocks with no major-road contact (e.g. residual supplement polygons):
-            # use centroid-like seeds, not boundary seeds, to preserve "grow from network inward"
-            # visuals in the primary local stage and avoid edge-to-center artifacts.
-            fallback = _block_centroid_vecs(block, int(max(1, cfg.local_community_seed_count_per_block)), rng)
-            major = _unit_from_angle_deg(_major_axis_angle_deg(block))
-            if major.length() <= 1e-9:
-                major = Vec2(1.0, 0.0)
-            for sp in fallback:
-                if not _point_in_poly_or_close(block, sp, tol=2.0):
-                    continue
-                seeds.append((sp, major, False))
-                fallback_centroid_seed_count += 1
+            # Skip blocks with no major-road contact entirely
+            # Previously used fallback centroid seeds, but this caused disconnected roads
+            # that appeared to spawn from nowhere
+            pass
 
         added = 0
         for sp, inward_dir, from_major_portal in seeds:
@@ -780,7 +774,8 @@ def generate_classic_local_fill(
         detach_boost_until_step = -1
         trace_reached_cap = False
 
-        d0, _ = _nearest_road_distance_and_projection(st.pos, base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
+        # Check if trace starts from major network (arterial or major_local)
+        d0, _ = _nearest_road_distance_and_projection(st.pos, major_only_segments) if major_only_segments else (float("inf"), None)
         if d0 < junction_probe:
             connected_network_count += 1
             local_contact_segments = list(existing_local_segments) + list(runtime_segments)
@@ -791,9 +786,21 @@ def generate_classic_local_fill(
                 if branch_role == "sub_local_connector":
                     local_sub_branch_connector_touch_count += 1
             else:
-                d0_major, _ = _nearest_road_distance_and_projection(st.pos, major_segments) if major_segments else (float("inf"), None)
+                d0_major, _ = _nearest_road_distance_and_projection(st.pos, major_only_segments) if major_only_segments else (float("inf"), None)
                 if d0_major < junction_probe:
                     connected_major_count += 1
+        else:
+            # If not starting from major network, check if starting from existing minor_local
+            # sub_local_connector branches start from existing minor_local traces
+            local_contact_segments = list(existing_local_segments) + list(runtime_segments)
+            d0_local, _ = _nearest_road_distance_and_projection(st.pos, local_contact_segments) if local_contact_segments else (float("inf"), None)
+            if d0_local < junction_probe:
+                # Starting from existing minor_local - inherit connectivity
+                connected_network_count += 1
+                connected_local_count += 1
+                local_touch_count_total += 1
+                if branch_role == "sub_local_connector":
+                    local_sub_branch_connector_touch_count += 1
 
         for step_idx in range(max_steps):
             cur = pts[-1]
@@ -806,12 +813,9 @@ def generate_classic_local_fill(
                 k=major_clearance_k,
             ) if major_segments else float(detach_target_clearance_m)
             in_post_contact_detach_boost = bool(step_idx < detach_boost_until_step)
-            detach_active = bool(
-                st.depth <= 1
-                and total_len < detach_max_len_m
-                and (bool(st.from_major_portal) or in_post_contact_detach_boost or d_major_cur < detach_influence_radius_m)
-                and cur_major_clearance < detach_target_clearance_m
-            )
+            # Disable detach logic to prevent curved/spiral roads
+            # The original logic caused roads to curve away from major roads excessively
+            detach_active = False
             if slope_deg > float(cfg.slope_serpentine_threshold_deg):
                 d = probe.choose_serpentine_direction(cur, prev_dir, step_m, rng=rng)
             else:
@@ -1035,6 +1039,37 @@ def generate_classic_local_fill(
                 if contact_mode in {"opposing", "parallel"}:
                     contact_mode_counts[str(contact_mode)] = contact_mode_counts.get(str(contact_mode), 0) + 1
                     terminate_on_touch = True
+                    # When terminating at intersection, spawn new branches from the intersection point
+                    # This makes the intersection a new growth point
+                    if snapped_to_network and proj_net is not None and (st.depth + 1) <= sub_branch_max_depth:
+                        # Get the tangent of the road we're connecting to
+                        tan_at_contact, _ = _nearest_segment_tangent(proj_net, base_segments + runtime_segments)
+                        if tan_at_contact is not None and tan_at_contact.length() > 1e-9:
+                            # Spawn branches perpendicular to the contacted road
+                            for sign in (-1.0, 1.0):
+                                bdir = Vec2(-tan_at_contact.y * sign, tan_at_contact.x * sign).normalized()
+                                if bdir.length() <= 1e-9:
+                                    continue
+                                # Don't spawn in the direction we came from
+                                if bdir.dot(d) < -0.5:
+                                    continue
+                                heapq.heappush(
+                                    queue,
+                                    _State(
+                                        priority=float(st.depth + 1) + float(rng.uniform(0.1, 0.6)),
+                                        pos=proj_net,
+                                        direction=bdir,
+                                        block_idx=active_block_idx,
+                                        depth=st.depth + 1,
+                                        lineage_id=f"{st.lineage_id}.x{branch_enq + 1}" if st.lineage_id else f"x{branch_enq + 1}",
+                                        parent_lineage_id=st.lineage_id or None,
+                                        from_major_portal=False,
+                                        branch_role="sub_local_connector",
+                                        next_sub_branch_trigger_m=float("inf"),
+                                        local_touch_count=connected_local_count,
+                                    ),
+                                )
+                                branch_enq += 1
                 elif (not persistent_mainline) and total_len >= near_network_terminate_min_len:
                     # Keep legacy-ish behavior for deeper branches to prevent overgrowth.
                     terminate_on_touch = True
@@ -1216,8 +1251,9 @@ def generate_classic_local_fill(
         if _polyline_length(pts) < float(cfg.local_classic_min_trace_len_m):
             continue
         # local streets can be semi-disconnected visually inside blocks, but prefer some network relation.
+        # Check connection to major roads only (arterial + major_local), not to other minor_local
         if connected_network_count < 1:
-            d_end, _ = _nearest_road_distance_and_projection(pts[-1], base_segments + runtime_segments) if (base_segments or runtime_segments) else (float("inf"), None)
+            d_end, _ = _nearest_road_distance_and_projection(pts[-1], major_only_segments) if major_only_segments else (float("inf"), None)
             if d_end < max(junction_probe * 2.5, 24.0):
                 connected_network_count = 1
         local_contact_segments_final = list(existing_local_segments) + list(runtime_segments)
