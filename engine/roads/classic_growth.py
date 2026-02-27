@@ -25,11 +25,11 @@ def _emit_stream_event(stream_cb: Optional[StreamCallback], event: Dict[str, Any
 
 
 @dataclass
-class ClassicCollectorConfig:
+class ClassicMajorLocalConfig:
     classic_probe_step_m: float = 24.0
     classic_seed_spacing_m: float = 260.0
     classic_max_trace_len_m: float = 1800.0
-    classic_min_trace_len_m: float = 120.0
+    classic_min_trace_len_m: float = 1000.0
     classic_turn_limit_deg: float = 38.0
     classic_branch_prob: float = 0.35
     classic_continue_prob: float = 0.80
@@ -238,7 +238,7 @@ def seed_classic_portals(
     edges: Sequence[object],
     blocks: Optional[Sequence[object]],
     river_union: object,
-    cfg: ClassicCollectorConfig,
+    cfg: ClassicMajorLocalConfig,
     seed: int,
 ) -> list[ClassicSeed]:
     rng = np.random.default_rng(int(seed) + 8301)
@@ -338,7 +338,7 @@ def seed_classic_portals(
                 p = rep()
                 add_seed(Vec2(float(p.x), float(p.y)), seed_kind="block_centroid")
 
-    # River-adjacent offset seeds to encourage waterfront collectors.
+    # River-adjacent offset seeds to encourage waterfront major_local roads.
     if river_union is not None and not getattr(river_union, "is_empty", True):
         try:
             from shapely.geometry import Point  # type: ignore
@@ -411,7 +411,7 @@ class ClassicRoadGenerator:
         edges: Sequence[object],
         hubs: Sequence[object],
         blocks: Optional[Sequence[object]],
-        cfg: ClassicCollectorConfig,
+        cfg: ClassicMajorLocalConfig,
         seed: int,
         stream_cb: Optional[StreamCallback] = None,
     ) -> None:
@@ -507,7 +507,7 @@ class ClassicRoadGenerator:
             base = art_tan or river_tan or _nearest_hub_vector(p, self.hubs) or Vec2(1.0, 0.0)
             if river_tan is not None and river_dist < float(self.cfg.river_snap_dist_m) * 4.0:
                 base = self._blend(base, river_tan, min(0.75, float(self.cfg.river_parallel_bias_weight) * 0.55))
-            # Prefer collector emergence roughly orthogonal to arterials.
+            # Prefer major_local emergence roughly orthogonal to arterials.
             if art_tan is not None and art_dist < float(self.cfg.classic_seed_spacing_m):
                 perp = Vec2(-art_tan.y, art_tan.x)
                 if self.rng.random() < 0.7:
@@ -597,7 +597,7 @@ class ClassicRoadGenerator:
     def _nearest_arterial_probe(self, p: Vec2) -> tuple[float, Optional[Vec2]]:
         return _nearest_road_distance_and_projection(p, self.arterial_segments)
 
-    def _nearest_runtime_collector_probe(self, p: Vec2) -> tuple[float, Optional[Vec2]]:
+    def _nearest_runtime_major_local_probe(self, p: Vec2) -> tuple[float, Optional[Vec2]]:
         return _nearest_road_distance_and_projection(p, self.runtime_segments)
 
     def _nearest_any_network_probe(self, p: Vec2) -> tuple[float, Optional[Vec2]]:
@@ -685,7 +685,7 @@ class ClassicRoadGenerator:
                 d = alt_dir
                 nxt = alt_nxt
 
-            # Distance-from-arterial constraint: stop collector growth that
+            # Distance-from-arterial constraint: stop major_local growth that
             # wanders too far from the arterial network to prevent infinite sprawl.
             max_art_dist = float(self.cfg.classic_max_arterial_distance_m)
             if max_art_dist > 0.0 and self.arterial_segments:
@@ -723,31 +723,6 @@ class ClassicRoadGenerator:
                 arterial_t_attached = True
                 reason = "near_arterial_t"
                 break
-
-            if can_snap:
-                d_net, proj_net = self._nearest_any_network_probe(nxt)
-                allow_network_fallback = (not must_arterial)
-                if d_net < junction_probe and proj_net is not None and allow_network_fallback:
-                    if proj_net.distance_to(cur) > 2.0:
-                        points.append(proj_net)
-                        total_len += cur.distance_to(proj_net)
-                        connected += 1
-                    network_attach_fallback = True
-                    reason = "near_network_fallback"
-                    break
-
-            # Avoid duplicating collectors too closely.
-            if self.runtime_segments:
-                d_col, _ = self._nearest_runtime_collector_probe(nxt)
-                dup_tol = max(6.0, (0.25 if must_arterial else 0.35) * step_m)
-                if d_col < dup_tol:
-                    weak_progress_steps += 1
-                    weak_limit = 3 if must_arterial else 2
-                    if weak_progress_steps >= weak_limit:
-                        reason = "near_collector_duplicate"
-                        break
-                else:
-                    weak_progress_steps = 0
 
             points.append(nxt)
             total_len += cur.distance_to(nxt)
@@ -887,20 +862,20 @@ class ClassicRoadGenerator:
         notes.append(f"classic_attach:fallback_network:{self.network_attach_fallback_count}")
         notes.append(f"classic_trace_count:{len(traces)}")
         numeric = {
-            "collector_classic_enabled": 1.0,
-            "collector_classic_trace_count": float(len(traces)),
-            "collector_classic_culdesac_count": float(self.culdesac_count),
-            "collector_classic_branch_enqueued_count": float(self.branch_enqueued),
-            "collector_classic_riverfront_seed_count": float(riverfront_seed_count),
-            "collector_classic_riverfront_trace_count": float(self.riverfront_trace_count),
-            "collector_classic_arterial_t_attach_count": float(self.arterial_t_attach_count),
-            "collector_classic_network_attach_fallback_count": float(self.network_attach_fallback_count),
-            "collector_classic_failed_arterial_attach_count": float(self.failed_arterial_attach_count),
+            "major_local_classic_enabled": 1.0,
+            "major_local_classic_trace_count": float(len(traces)),
+            "major_local_classic_culdesac_count": float(self.culdesac_count),
+            "major_local_classic_branch_enqueued_count": float(self.branch_enqueued),
+            "major_local_classic_riverfront_seed_count": float(riverfront_seed_count),
+            "major_local_classic_riverfront_trace_count": float(self.riverfront_trace_count),
+            "major_local_classic_arterial_t_attach_count": float(self.arterial_t_attach_count),
+            "major_local_classic_network_attach_fallback_count": float(self.network_attach_fallback_count),
+            "major_local_classic_failed_arterial_attach_count": float(self.failed_arterial_attach_count),
         }
         return traces, cul_flags, notes, numeric
 
 
-def generate_classic_collectors(
+def generate_classic_major_local(
     *,
     extent_m: float,
     height: Optional[np.ndarray],
@@ -912,7 +887,7 @@ def generate_classic_collectors(
     edges: Sequence[object],
     hubs: Sequence[object],
     blocks: Optional[Sequence[object]],
-    cfg: ClassicCollectorConfig,
+    cfg: ClassicMajorLocalConfig,
     seed: int,
     stream_cb: Optional[StreamCallback] = None,
 ) -> tuple[list[list[Vec2]], list[bool], list[str], dict[str, float]]:

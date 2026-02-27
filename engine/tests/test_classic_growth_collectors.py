@@ -3,7 +3,7 @@ from shapely.geometry import Point, Polygon
 
 from engine.core.geometry import Vec2
 from engine.hubs.sampling import HubPoint
-from engine.roads.classic_growth import ClassicCollectorConfig, generate_classic_collectors
+from engine.roads.classic_growth import ClassicMajorLocalConfig, generate_classic_major_local
 from engine.roads.network import BuiltRoadEdge, BuiltRoadNode
 
 
@@ -41,7 +41,7 @@ def test_classic_turtle_collectors_generate_and_respect_river_setback():
     height = np.tile(x[None, :], (64, 1))
     slope = np.ones((64, 64), dtype=np.float64) * 0.35
     river_mask = np.zeros((64, 64), dtype=bool)
-    traces, cul_flags, notes, numeric = generate_classic_collectors(
+    traces, cul_flags, notes, numeric = generate_classic_major_local(
         extent_m=500.0,
         height=height,
         slope=slope,
@@ -52,7 +52,7 @@ def test_classic_turtle_collectors_generate_and_respect_river_setback():
         edges=edges,
         hubs=hubs,
         blocks=blocks,
-        cfg=ClassicCollectorConfig(
+        cfg=ClassicMajorLocalConfig(
             classic_seed_spacing_m=120.0,
             classic_probe_step_m=18.0,
             classic_max_trace_len_m=600.0,
@@ -70,10 +70,10 @@ def test_classic_turtle_collectors_generate_and_respect_river_setback():
     assert any(n.startswith("classic_trace_count:") for n in notes)
     assert len(traces) > 0
     assert len(cul_flags) == len(traces)
-    assert numeric.get("collector_classic_enabled", 0.0) > 0.5
-    assert numeric.get("collector_classic_riverfront_seed_count", 0.0) > 0.0
-    assert "collector_classic_arterial_t_attach_count" in numeric
-    assert "collector_classic_network_attach_fallback_count" in numeric
+    assert numeric.get("major_local_classic_enabled", 0.0) > 0.5
+    assert numeric.get("major_local_classic_riverfront_seed_count", 0.0) > 0.0
+    assert "major_local_classic_arterial_t_attach_count" in numeric
+    assert "major_local_classic_network_attach_fallback_count" in numeric
     forbidden = river_union.buffer(15.0)
     for tr in traces:
         assert len(tr) >= 2

@@ -130,8 +130,8 @@ def test_generate_v2_success():
     assert "parcel_lots" in body["stages"][-1]["layers"]
     assert not any("Tensor" in note for note in body["final_artifact"]["metrics"].get("notes", []))
     metrics = body["final_artifact"]["metrics"]
-    assert "collector_classic_arterial_t_attach_count" in metrics
-    assert "collector_classic_riverfront_seed_count" in metrics
+    assert "major_local_classic_arterial_t_attach_count" in metrics
+    assert "major_local_classic_riverfront_seed_count" in metrics
     assert "local_culdesac_edge_count_final" in metrics
     assert "local_culdesac_preserved_ratio" in metrics
     assert "local_reroute_candidate_count" in metrics

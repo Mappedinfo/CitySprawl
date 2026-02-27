@@ -1690,14 +1690,14 @@ def _generate_hierarchy_linework(
     style = (road_style or "skeleton").lower()
     notes: list[str] = []
     numeric: dict[str, float] = {
-        "collector_classic_enabled": 0.0,
-        "collector_classic_degraded": 0.0,
-        "collector_classic_trace_count": 0.0,
-        "collector_classic_riverfront_seed_count": 0.0,
-        "collector_classic_riverfront_trace_count": 0.0,
-        "collector_classic_arterial_t_attach_count": 0.0,
-        "collector_classic_network_attach_fallback_count": 0.0,
-        "collector_classic_failed_arterial_attach_count": 0.0,
+        "major_local_classic_enabled": 0.0,
+        "major_local_classic_degraded": 0.0,
+        "major_local_classic_trace_count": 0.0,
+        "major_local_classic_riverfront_seed_count": 0.0,
+        "major_local_classic_riverfront_trace_count": 0.0,
+        "major_local_classic_arterial_t_attach_count": 0.0,
+        "major_local_classic_network_attach_fallback_count": 0.0,
+        "major_local_classic_failed_arterial_attach_count": 0.0,
         "local_classic_enabled": 0.0,
         "local_classic_degraded": 0.0,
         "local_classic_trace_count": 0.0,
@@ -1767,15 +1767,15 @@ def _generate_hierarchy_linework(
             notes.append("collector_generator_degraded:grid_clip")
         if collector_backend == "classic_turtle":
             try:
-                from engine.roads.classic_growth import ClassicCollectorConfig, generate_classic_collectors  # type: ignore
+                from engine.roads.classic_growth import ClassicMajorLocalConfig, generate_classic_major_local  # type: ignore
             except Exception:
                 collector_backend = "grid_clip"
                 notes.append("collector_generator_degraded:grid_clip")
-                numeric["collector_classic_degraded"] = 1.0
+                numeric["major_local_classic_degraded"] = 1.0
             else:
                 try:
-                    numeric["collector_classic_enabled"] = 1.0
-                    traces, cul_flags, classic_notes, classic_numeric = generate_classic_collectors(
+                    numeric["major_local_classic_enabled"] = 1.0
+                    traces, cul_flags, classic_notes, classic_numeric = generate_classic_major_local(
                         extent_m=extent_m,
                         height=height,
                         slope=slope,
@@ -1786,7 +1786,7 @@ def _generate_hierarchy_linework(
                         edges=edges,
                         hubs=list(hubs or []),
                         blocks=collector_blocks,
-                        cfg=ClassicCollectorConfig(
+                        cfg=ClassicMajorLocalConfig(
                             classic_probe_step_m=classic_probe_step_m,
                             classic_seed_spacing_m=classic_seed_spacing_m,
                             classic_max_trace_len_m=classic_max_trace_len_m,
@@ -1816,14 +1816,14 @@ def _generate_hierarchy_linework(
                 except Exception:
                     collector_backend = "grid_clip"
                     notes.append("collector_generator_degraded:grid_clip")
-                    numeric["collector_classic_degraded"] = 1.0
+                    numeric["major_local_classic_degraded"] = 1.0
                 else:
                     notes.extend(classic_notes)
                     numeric.update({k: float(v) for k, v in classic_numeric.items()})
                     if not traces:
                         collector_backend = "grid_clip"
                         notes.append("collector_generator_degraded:grid_clip")
-                        numeric["collector_classic_degraded"] = 1.0
+                        numeric["major_local_classic_degraded"] = 1.0
                     else:
                         for trace_idx, pts in enumerate(traces):
                             edge_suffix = "-cul" if trace_idx < len(cul_flags) and bool(cul_flags[trace_idx]) else ""
@@ -1844,7 +1844,7 @@ def _generate_hierarchy_linework(
                                 stream_cb=stream_cb,
                             )
                             collector_added += 1
-                        numeric["collector_classic_trace_count"] = float(len(traces))
+                        numeric["major_local_classic_trace_count"] = float(len(traces))
 
         if collector_backend != "classic_turtle":
             for bi, block in enumerate(collector_blocks):

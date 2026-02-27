@@ -626,23 +626,23 @@ def _build_city_artifact_from_core(
         metric_notes.append("Major Local generator degraded to grid_clip")
     trace_count = int(
         metric_values.get(
-            "collector_classic_trace_count",
+            "major_local_classic_trace_count",
             metric_values.get("collector_tensor_trace_count", 0.0),
         )
     )
     if trace_count > 0:
-        metric_notes.append(f"Classic collector traces: {trace_count}")
-    riverfront_seed_count = int(metric_values.get("collector_classic_riverfront_seed_count", 0.0))
-    riverfront_trace_count = int(metric_values.get("collector_classic_riverfront_trace_count", 0.0))
+        metric_notes.append(f"Classic major_local traces: {trace_count}")
+    riverfront_seed_count = int(metric_values.get("major_local_classic_riverfront_seed_count", 0.0))
+    riverfront_trace_count = int(metric_values.get("major_local_classic_riverfront_trace_count", 0.0))
     if riverfront_seed_count > 0:
-        metric_notes.append(f"Classic collector riverfront seeds: {riverfront_seed_count}")
+        metric_notes.append(f"Classic major_local riverfront seeds: {riverfront_seed_count}")
     if riverfront_trace_count > 0:
-        metric_notes.append(f"Classic collector riverfront traces: {riverfront_trace_count}")
-    arterial_t_attach_count = int(metric_values.get("collector_classic_arterial_t_attach_count", 0.0))
-    fallback_attach_count = int(metric_values.get("collector_classic_network_attach_fallback_count", 0.0))
+        metric_notes.append(f"Classic major_local riverfront traces: {riverfront_trace_count}")
+    arterial_t_attach_count = int(metric_values.get("major_local_classic_arterial_t_attach_count", 0.0))
+    fallback_attach_count = int(metric_values.get("major_local_classic_network_attach_fallback_count", 0.0))
     if arterial_t_attach_count > 0 or fallback_attach_count > 0:
         metric_notes.append(
-            f"Classic collector attachments: arterial_t={arterial_t_attach_count}, fallback={fallback_attach_count}"
+            f"Classic major_local attachments: arterial_t={arterial_t_attach_count}, fallback={fallback_attach_count}"
         )
     local_trace_count = int(metric_values.get("local_classic_trace_count", 0.0))
     if float(metric_values.get("local_generator_classic_sprawl", 0.0)) > 0.5:
@@ -852,14 +852,14 @@ def _build_city_artifact_from_core(
         intersection_t_split_target_count=int(metric_values.get("intersection_t_split_target_count", 0.0)),
         intersection_crossing_split_count=int(metric_values.get("intersection_crossing_split_count", 0.0)),
         intersection_pruned_dangle_count=int(metric_values.get("intersection_pruned_dangle_count", 0.0)),
-        collector_classic_riverfront_seed_count=int(metric_values.get("collector_classic_riverfront_seed_count", 0.0)),
-        collector_classic_riverfront_trace_count=int(metric_values.get("collector_classic_riverfront_trace_count", 0.0)),
-        collector_classic_arterial_t_attach_count=int(metric_values.get("collector_classic_arterial_t_attach_count", 0.0)),
-        collector_classic_network_attach_fallback_count=int(
-            metric_values.get("collector_classic_network_attach_fallback_count", 0.0)
+        major_local_classic_riverfront_seed_count=int(metric_values.get("major_local_classic_riverfront_seed_count", 0.0)),
+        major_local_classic_riverfront_trace_count=int(metric_values.get("major_local_classic_riverfront_trace_count", 0.0)),
+        major_local_classic_arterial_t_attach_count=int(metric_values.get("major_local_classic_arterial_t_attach_count", 0.0)),
+        major_local_classic_network_attach_fallback_count=int(
+            metric_values.get("major_local_classic_network_attach_fallback_count", 0.0)
         ),
-        collector_classic_failed_arterial_attach_count=int(
-            metric_values.get("collector_classic_failed_arterial_attach_count", 0.0)
+        major_local_classic_failed_arterial_attach_count=int(
+            metric_values.get("major_local_classic_failed_arterial_attach_count", 0.0)
         ),
         local_culdesac_edge_count_pre_topology=int(metric_values.get("local_culdesac_edge_count_pre_topology", 0.0)),
         local_culdesac_edge_count_final=int(metric_values.get("local_culdesac_edge_count_final", 0.0)),

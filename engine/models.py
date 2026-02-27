@@ -93,7 +93,7 @@ class RoadsConfig(StrictModel):
     classic_probe_step_m: float = Field(default=24.0, gt=1.0, le=500.0)
     classic_seed_spacing_m: float = Field(default=260.0, gt=5.0, le=5000.0)
     classic_max_trace_len_m: float = Field(default=1800.0, gt=10.0, le=50000.0)
-    classic_min_trace_len_m: float = Field(default=120.0, gt=1.0, le=5000.0)
+    classic_min_trace_len_m: float = Field(default=1000.0, gt=1.0, le=5000.0)
     classic_turn_limit_deg: float = Field(default=38.0, ge=1.0, le=180.0)
     classic_branch_prob: float = Field(default=0.35, ge=0.0, le=1.0)
     classic_continue_prob: float = Field(default=0.80, ge=0.0, le=1.0)
@@ -330,11 +330,11 @@ class Metrics(StrictModel):
     intersection_t_split_target_count: int = 0
     intersection_crossing_split_count: int = 0
     intersection_pruned_dangle_count: int = 0
-    collector_classic_riverfront_seed_count: int = 0
-    collector_classic_riverfront_trace_count: int = 0
-    collector_classic_arterial_t_attach_count: int = 0
-    collector_classic_network_attach_fallback_count: int = 0
-    collector_classic_failed_arterial_attach_count: int = 0
+    major_local_classic_riverfront_seed_count: int = 0
+    major_local_classic_riverfront_trace_count: int = 0
+    major_local_classic_arterial_t_attach_count: int = 0
+    major_local_classic_network_attach_fallback_count: int = 0
+    major_local_classic_failed_arterial_attach_count: int = 0
     local_culdesac_edge_count_pre_topology: int = 0
     local_culdesac_edge_count_final: int = 0
     local_culdesac_preserved_ratio: float = 0.0
