@@ -334,12 +334,12 @@ def _default_preset() -> GenerateConfig:
             "max_local_block_area_m2": 180000.0,
             "collector_generator": "classic_turtle",
             "classic_probe_step_m": 24.0,
-            "classic_seed_spacing_m": 260.0,
-            "classic_max_trace_len_m": 1800.0,
-            "classic_min_trace_len_m": 120.0,
+            "classic_seed_spacing_m": 120.0,
+            "classic_max_trace_len_m": 5000.0,
+            "classic_min_trace_len_m": 200.0,
             "classic_turn_limit_deg": 38.0,
-            "classic_branch_prob": 0.35,
-            "classic_continue_prob": 0.80,
+            "classic_branch_prob": 1.0,
+            "classic_continue_prob": 1.0,
             "classic_culdesac_prob": 0.18,
             "classic_max_queue_size": 2000,
             "classic_max_segments": 1200,
@@ -402,12 +402,12 @@ def _river_valley_preset() -> GenerateConfig:
             "max_local_block_area_m2": 180000.0,
             "collector_generator": "classic_turtle",
             "classic_probe_step_m": 22.0,
-            "classic_seed_spacing_m": 220.0,
-            "classic_max_trace_len_m": 2400.0,
-            "classic_min_trace_len_m": 120.0,
+            "classic_seed_spacing_m": 100.0,
+            "classic_max_trace_len_m": 5000.0,
+            "classic_min_trace_len_m": 200.0,
             "classic_turn_limit_deg": 35.0,
-            "classic_branch_prob": 0.38,
-            "classic_continue_prob": 0.82,
+            "classic_branch_prob": 1.0,
+            "classic_continue_prob": 1.0,
             "classic_culdesac_prob": 0.15,
             "classic_max_queue_size": 2800,
             "classic_max_segments": 1800,
@@ -470,12 +470,12 @@ def _hills_preset() -> GenerateConfig:
             "max_local_block_area_m2": 220000.0,
             "collector_generator": "classic_turtle",
             "classic_probe_step_m": 26.0,
-            "classic_seed_spacing_m": 340.0,
-            "classic_max_trace_len_m": 1200.0,
-            "classic_min_trace_len_m": 100.0,
+            "classic_seed_spacing_m": 150.0,
+            "classic_max_trace_len_m": 5000.0,
+            "classic_min_trace_len_m": 200.0,
             "classic_turn_limit_deg": 42.0,
-            "classic_branch_prob": 0.28,
-            "classic_continue_prob": 0.78,
+            "classic_branch_prob": 1.0,
+            "classic_continue_prob": 1.0,
             "classic_culdesac_prob": 0.22,
             "classic_max_queue_size": 1200,
             "classic_max_segments": 800,
@@ -566,6 +566,68 @@ def create_app() -> FastAPI:
         if result is None:
             raise HTTPException(status_code=404, detail="run_not_found")
         return RunLogsResponse(**result)
+
+    @app.get("/api/v2/trace_logs")
+    def list_trace_logs() -> Dict[str, Any]:
+        """List available major_local trace log files."""
+        log_dir = Path(__file__).parent.parent / "logs"
+        if not log_dir.exists():
+            return {"logs": [], "log_dir": str(log_dir)}
+        
+        logs = []
+        for f in sorted(log_dir.glob("major_local_trace_*.json"), reverse=True):
+            try:
+                stat = f.stat()
+                logs.append({
+                    "filename": f.name,
+                    "path": str(f),
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                })
+            except Exception:
+                continue
+        
+        return {"logs": logs, "log_dir": str(log_dir)}
+
+    @app.get("/api/v2/trace_logs/{filename}")
+    def get_trace_log(filename: str) -> Dict[str, Any]:
+        """Get contents of a specific trace log file."""
+        # Security: only allow filenames, not paths
+        if "/" in filename or "\\" in filename or ".." in filename:
+            raise HTTPException(status_code=400, detail="invalid_filename")
+        
+        log_dir = Path(__file__).parent.parent / "logs"
+        log_path = log_dir / filename
+        
+        if not log_path.exists():
+            raise HTTPException(status_code=404, detail="log_not_found")
+        
+        try:
+            with log_path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=500, detail=f"invalid_json:{exc.msg}") from exc
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"io_error:{exc}") from exc
+
+    @app.delete("/api/v2/trace_logs/{filename}")
+    def delete_trace_log(filename: str) -> Dict[str, str]:
+        """Delete a specific trace log file."""
+        # Security: only allow filenames, not paths
+        if "/" in filename or "\\" in filename or ".." in filename:
+            raise HTTPException(status_code=400, detail="invalid_filename")
+        
+        log_dir = Path(__file__).parent.parent / "logs"
+        log_path = log_dir / filename
+        
+        if not log_path.exists():
+            raise HTTPException(status_code=404, detail="log_not_found")
+        
+        try:
+            log_path.unlink()
+            return {"status": "deleted", "filename": filename}
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"delete_failed:{exc}") from exc
 
     @app.get("/api/v2/jobs/{job_id}/result", response_model=StagedCityResponse)
     def get_generate_job_result(job_id: str) -> StagedCityResponse:

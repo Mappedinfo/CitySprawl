@@ -482,7 +482,7 @@ def generate_classic_local_fill(
         if probe.check_water_hit(pos):
             return False
         bucket = major_seed_portal_by_block[int(block_idx)]
-        dedupe_dist = min(260.0, max(120.0, major_seed_spacing_min_m * 0.48))
+        dedupe_dist = min(400.0, max(150.0, major_seed_spacing_min_m * 0.75))
         for ep, edir, _eclear in bucket:
             if pos.distance_to(ep) < dedupe_dist and abs(d0.dot(edir.normalized())) > 0.6:
                 return False
@@ -1228,7 +1228,7 @@ def generate_classic_local_fill(
                 local_touch_count_total += 1
                 if branch_role == "sub_local_connector":
                     local_sub_branch_connector_touch_count += 1
-        if connected_network_count < 1 and len(runtime_segments) > 0 and (not bool(getattr(cfg, "local_allow_disconnected_accept", False))):
+        if connected_network_count < 1 and (not bool(getattr(cfg, "local_allow_disconnected_accept", False))):
             continue
 
         traces.append(pts)

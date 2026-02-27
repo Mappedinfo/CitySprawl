@@ -1922,3 +1922,309 @@ button:disabled {
     flex-wrap: wrap;
   }
 }
+
+/* Trace Log Viewer */
+.trace-log-viewer {
+  display: grid;
+  gap: 10px;
+}
+
+.trace-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trace-log-title {
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.trace-log-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.trace-log-btn {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  border-radius: 6px;
+}
+
+.trace-log-dir {
+  color: var(--ink-dim);
+  font-size: 0.68rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-log-error {
+  color: var(--warn);
+  font-size: 0.76rem;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 80, 80, 0.1);
+  border: 1px solid rgba(255, 80, 80, 0.2);
+}
+
+.trace-log-list {
+  display: grid;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.trace-log-empty {
+  color: var(--ink-dim);
+  font-size: 0.76rem;
+  text-align: center;
+  padding: 12px;
+}
+
+.trace-log-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(8, 14, 24, 0.52);
+  border: 1px solid rgba(108, 223, 255, 0.08);
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+
+.trace-log-item:hover {
+  border-color: rgba(108, 223, 255, 0.2);
+  background: rgba(12, 20, 32, 0.6);
+}
+
+.trace-log-item.selected {
+  border-color: rgba(92, 238, 255, 0.45);
+  background: rgba(12, 22, 36, 0.7);
+}
+
+.trace-log-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.trace-log-filename {
+  color: var(--ink);
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-log-meta {
+  color: var(--ink-dim);
+  font-size: 0.64rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.trace-log-delete-btn {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.trace-log-delete-btn:hover {
+  color: var(--warn);
+  border-color: rgba(255, 80, 80, 0.3);
+  background: rgba(255, 80, 80, 0.1);
+}
+
+.trace-log-loading {
+  color: var(--ink-dim);
+  font-size: 0.76rem;
+  text-align: center;
+  padding: 8px;
+}
+
+.trace-log-content {
+  display: grid;
+  gap: 10px;
+}
+
+.trace-log-summary {
+  border-radius: 10px;
+  border: 1px solid rgba(108, 223, 255, 0.12);
+  background: rgba(8, 13, 21, 0.72);
+  padding: 10px;
+}
+
+.trace-log-summary-title {
+  color: var(--ink-dim);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.trace-log-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.trace-log-summary-grid > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(8, 14, 24, 0.5);
+}
+
+.trace-log-summary-grid .label {
+  color: var(--ink-dim);
+  font-size: 0.68rem;
+}
+
+.trace-log-summary-grid .value {
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.trace-log-summary-grid .value.accepted {
+  color: rgba(124, 255, 188, 0.95);
+}
+
+.trace-log-summary-grid .value.rejected {
+  color: var(--warn);
+}
+
+.trace-log-reasons {
+  margin-top: 8px;
+}
+
+.trace-log-reasons .reasons-title {
+  color: var(--ink-dim);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+
+.trace-log-reasons .reasons-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.trace-log-reasons .reason-tag {
+  border-radius: 999px;
+  padding: 2px 6px;
+  border: 1px solid rgba(108, 223, 255, 0.16);
+  background: rgba(8, 13, 21, 0.7);
+  color: var(--ink-dim);
+  font-size: 0.64rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.trace-log-reasons .reason-tag.rejected {
+  border-color: rgba(255, 80, 80, 0.2);
+  color: rgba(255, 140, 130, 0.9);
+}
+
+.trace-log-traces {
+  border-radius: 10px;
+  border: 1px solid rgba(108, 223, 255, 0.12);
+  background: rgba(8, 13, 21, 0.72);
+  padding: 10px;
+}
+
+.trace-log-traces .traces-title {
+  color: var(--ink-dim);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.trace-log-traces .traces-list {
+  display: grid;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.trace-log-traces .trace-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(8, 14, 24, 0.5);
+  font-size: 0.68rem;
+}
+
+.trace-log-traces .trace-item.accepted {
+  border-left: 2px solid rgba(124, 255, 188, 0.6);
+}
+
+.trace-log-traces .trace-item.rejected {
+  border-left: 2px solid rgba(255, 100, 90, 0.6);
+}
+
+.trace-log-traces .trace-id {
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trace-log-traces .trace-status {
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+}
+
+.trace-log-traces .trace-item.accepted .trace-status {
+  color: rgba(124, 255, 188, 0.95);
+}
+
+.trace-log-traces .trace-item.rejected .trace-status {
+  color: var(--warn);
+}
+
+.trace-log-traces .trace-reason {
+  flex: 1 1 auto;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-log-traces .trace-length,
+.trace-log-traces .trace-points {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.trace-log-traces .traces-more {
+  color: var(--ink-dim);
+  font-size: 0.66rem;
+  text-align: center;
+  padding: 4px;
+}

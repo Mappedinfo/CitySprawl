@@ -1767,7 +1767,7 @@ def _generate_hierarchy_linework(
             notes.append("collector_generator_degraded:grid_clip")
         if collector_backend == "classic_turtle":
             try:
-                from engine.roads.classic_growth import ClassicMajorLocalConfig, generate_classic_major_local  # type: ignore
+                from engine.roads.classic_growth import ClassicMajorLocalConfig, generate_classic_major_local, MajorLocalGenerationLog  # type: ignore
             except Exception:
                 collector_backend = "grid_clip"
                 notes.append("collector_generator_degraded:grid_clip")
@@ -1775,7 +1775,21 @@ def _generate_hierarchy_linework(
             else:
                 try:
                     numeric["major_local_classic_enabled"] = 1.0
-                    traces, cul_flags, classic_notes, classic_numeric = generate_classic_major_local(
+                    # Trace logging is enabled by default, logs saved to engine/logs/
+                    enable_trace_logging = True
+                    trace_log_step_details = getattr(roads_cfg, "major_local_trace_log_step_details", False) if roads_cfg else False
+                    trace_log_include_rejected = getattr(roads_cfg, "major_local_trace_log_include_rejected", True) if roads_cfg else True
+                    trace_log_max_traces = getattr(roads_cfg, "major_local_trace_log_max_traces", 0) if roads_cfg else 0
+                    
+                    # Generate default log path with timestamp
+                    from pathlib import Path
+                    from datetime import datetime
+                    log_dir = Path(__file__).parent.parent / "logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    trace_log_output_path = str(log_dir / f"major_local_trace_{timestamp}_seed{seed}.json")
+                    
+                    traces, cul_flags, classic_notes, classic_numeric, major_local_log = generate_classic_major_local(
                         extent_m=extent_m,
                         height=height,
                         slope=slope,
@@ -1809,10 +1823,24 @@ def _generate_hierarchy_linework(
                             river_parallel_bias_weight=river_parallel_bias_weight,
                             river_avoid_weight=river_avoid_weight,
                             river_setback_m=river_setback_m,
+                            enable_trace_logging=enable_trace_logging,
+                            trace_log_step_details=trace_log_step_details,
+                            trace_log_output_path=trace_log_output_path,
+                            trace_log_include_rejected=trace_log_include_rejected,
+                            trace_log_max_traces=trace_log_max_traces,
                         ),
                         seed=seed,
                         stream_cb=stream_cb,
                     )
+                    
+                    # Save trace log to file if path is configured
+                    if major_local_log is not None and trace_log_output_path:
+                        from pathlib import Path
+                        try:
+                            major_local_log.save_to_file(Path(trace_log_output_path))
+                            notes.append(f"major_local_trace_log_saved:{trace_log_output_path}")
+                        except Exception as e:
+                            notes.append(f"major_local_trace_log_save_failed:{e}")
                 except Exception:
                     collector_backend = "grid_clip"
                     notes.append("collector_generator_degraded:grid_clip")
@@ -3120,12 +3148,12 @@ def generate_roads(
     max_local_block_area_m2: float = 180000.0,
     collector_generator: str = "classic_turtle",
     classic_probe_step_m: float = 24.0,
-    classic_seed_spacing_m: float = 260.0,
-    classic_max_trace_len_m: float = 1800.0,
-    classic_min_trace_len_m: float = 120.0,
+    classic_seed_spacing_m: float = 120.0,
+    classic_max_trace_len_m: float = 5000.0,
+    classic_min_trace_len_m: float = 200.0,
     classic_turn_limit_deg: float = 38.0,
-    classic_branch_prob: float = 0.35,
-    classic_continue_prob: float = 0.80,
+    classic_branch_prob: float = 1.0,
+    classic_continue_prob: float = 1.0,
     classic_culdesac_prob: float = 0.18,
     classic_max_queue_size: int = 2000,
     classic_max_segments: int = 1200,
@@ -3143,7 +3171,7 @@ def generate_roads(
     intersection_snap_radius_m: float = 12.0,
     intersection_t_junction_radius_m: float = 18.0,
     intersection_split_tolerance_m: float = 1.5,
-    min_dangle_length_m: float = 35.0,
+    min_dangle_length_m: float = 15.0,
     syntax_enable: bool = True,
     syntax_choice_radius_hops: int = 10,
     syntax_prune_low_choice_collectors: bool = True,

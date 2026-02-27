@@ -1,0 +1,697 @@
+{
+  "seed_count": 6,
+  "seeds": [
+    {
+      "position": {
+        "x": 357.1428571428571,
+        "y": 1000.0
+      },
+      "seed_kind": "arterial_portal",
+      "must_attach_arterial": false,
+      "riverfront_bias_steps": 0
+    },
+    {
+      "position": {
+        "x": 614.2857142857142,
+        "y": 1000.0
+      },
+      "seed_kind": "arterial_portal",
+      "must_attach_arterial": false,
+      "riverfront_bias_steps": 0
+    },
+    {
+      "position": {
+        "x": 871.4285714285713,
+        "y": 1000.0
+      },
+      "seed_kind": "arterial_portal",
+      "must_attach_arterial": false,
+      "riverfront_bias_steps": 0
+    },
+    {
+      "position": {
+        "x": 1128.5714285714284,
+        "y": 1000.0
+      },
+      "seed_kind": "arterial_portal",
+      "must_attach_arterial": false,
+      "riverfront_bias_steps": 0
+    },
+    {
+      "position": {
+        "x": 1385.7142857142858,
+        "y": 1000.0
+      },
+      "seed_kind": "arterial_portal",
+      "must_attach_arterial": false,
+      "riverfront_bias_steps": 0
+    },
+    {
+      "position": {
+        "x": 1642.8571428571427,
+        "y": 1000.0
+      },
+      "seed_kind": "arterial_portal",
+      "must_attach_arterial": false,
+      "riverfront_bias_steps": 0
+    }
+  ],
+  "traces": [
+    {
+      "trace_id": "major_local-0000",
+      "seed": {
+        "position": {
+          "x": 1385.7142857142858,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": 0.2689347856076601,
+          "y": -0.9631583883713841
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": true,
+        "rejection_reason": null,
+        "termination_reason": "stochastic_stop",
+        "total_length": 167.99999999999997,
+        "point_count": 8,
+        "connection_count": 1,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": [
+          {
+            "x": 1385.7142857142858,
+            "y": 1000.0
+          },
+          {
+            "x": 1376.4008785149535,
+            "y": 977.8807675011219
+          },
+          {
+            "x": 1361.6799393366118,
+            "y": 958.9257167307452
+          },
+          {
+            "x": 1338.4268202550375,
+            "y": 952.984971577305
+          },
+          {
+            "x": 1314.427157367383,
+            "y": 953.1121772333792
+          },
+          {
+            "x": 1290.589595330892,
+            "y": 950.3245911528337
+          },
+          {
+            "x": 1266.6235907699893,
+            "y": 949.0476317224721
+          },
+          {
+            "x": 1245.9138414936028,
+            "y": 961.176369699245
+          }
+        ]
+      }
+    },
+    {
+      "trace_id": "major_local-0001",
+      "seed": {
+        "position": {
+          "x": 614.2857142857142,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": -0.07638607679494092,
+          "y": 0.9970783155158263
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": true,
+        "rejection_reason": null,
+        "termination_reason": "stochastic_stop",
+        "total_length": 455.99999999999994,
+        "point_count": 20,
+        "connection_count": 1,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": [
+          {
+            "x": 614.2857142857142,
+            "y": 1000.0
+          },
+          {
+            "x": 597.9743557257424,
+            "y": 1017.6051010201031
+          },
+          {
+            "x": 574.2536693411384,
+            "y": 1021.2559964504412
+          },
+          {
+            "x": 552.417778608101,
+            "y": 1031.2156086866105
+          },
+          {
+            "x": 530.4061667716448,
+            "y": 1040.7805940165094
+          },
+          {
+            "x": 510.1027674388428,
+            "y": 1053.5779365348908
+          },
+          {
+            "x": 486.33338047843193,
+            "y": 1056.8970092256056
+          },
+          {
+            "x": 462.74878062509174,
+            "y": 1061.3429792837399
+          },
+          {
+            "x": 438.7639283017131,
+            "y": 1060.4904190068557
+          },
+          {
+            "x": 414.8993231433255,
+            "y": 1063.0361253202898
+          },
+          {
+            "x": 391.261241272541,
+            "y": 1067.1883639297737
+          },
+          {
+            "x": 367.59479801257953,
+            "y": 1063.200950805576
+          },
+          {
+            "x": 343.6189544348049,
+            "y": 1064.2774844716
+          },
+          {
+            "x": 319.74575120530636,
+            "y": 1061.8137134670094
+          },
+          {
+            "x": 296.0988393468478,
+            "y": 1057.7120601956697
+          },
+          {
+            "x": 272.17583005850696,
+            "y": 1055.7912201216502
+          },
+          {
+            "x": 248.68168011806733,
+            "y": 1060.692742188941
+          },
+          {
+            "x": 224.79369382407833,
+            "y": 1063.0087972008512
+          },
+          {
+            "x": 205.21769733188967,
+            "y": 1076.8933339715834
+          },
+          {
+            "x": 182.29866045392671,
+            "y": 1084.0149734307652
+          }
+        ]
+      }
+    },
+    {
+      "trace_id": "major_local-0002",
+      "seed": {
+        "position": {
+          "x": 1642.8571428571427,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": -0.42117421292097296,
+          "y": 0.9069797585229777
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": true,
+        "rejection_reason": null,
+        "termination_reason": "stochastic_stop",
+        "total_length": 192.0,
+        "point_count": 9,
+        "connection_count": 1,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": [
+          {
+            "x": 1642.8571428571427,
+            "y": 1000.0
+          },
+          {
+            "x": 1621.3714798794529,
+            "y": 1010.6942174285512
+          },
+          {
+            "x": 1611.1891355196765,
+            "y": 1032.4271386159785
+          },
+          {
+            "x": 1591.283620244395,
+            "y": 1045.8349893619236
+          },
+          {
+            "x": 1568.137934971869,
+            "y": 1052.181425626882
+          },
+          {
+            "x": 1544.3195388587155,
+            "y": 1055.1282894847675
+          },
+          {
+            "x": 1520.7311893287708,
+            "y": 1050.7022566727385
+          },
+          {
+            "x": 1496.8178798111715,
+            "y": 1048.6642115516745
+          },
+          {
+            "x": 1472.89582790112,
+            "y": 1050.5969382299184
+          }
+        ]
+      }
+    },
+    {
+      "trace_id": "major_local-rejected-0003",
+      "seed": {
+        "position": {
+          "x": 1385.7142857142858,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": -0.41264928856545957,
+          "y": 0.9108899849303539
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": false,
+        "rejection_reason": "seed_too_close:0.0m",
+        "termination_reason": null,
+        "total_length": 0.0,
+        "point_count": 0,
+        "connection_count": 0,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": []
+      }
+    },
+    {
+      "trace_id": "major_local-0003",
+      "seed": {
+        "position": {
+          "x": 871.4285714285713,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": 0.9396601869918775,
+          "y": -0.34210924129931036
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": true,
+        "rejection_reason": null,
+        "termination_reason": "near_arterial_t",
+        "total_length": 102.52580385258479,
+        "point_count": 5,
+        "connection_count": 2,
+        "culdesac": false,
+        "arterial_t_attached": true,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": [
+          {
+            "x": 871.4285714285713,
+            "y": 1000.0
+          },
+          {
+            "x": 883.9899312344124,
+            "y": 979.5497618637778
+          },
+          {
+            "x": 906.5696408769187,
+            "y": 971.416084192508
+          },
+          {
+            "x": 929.9522180201365,
+            "y": 976.8248812992103
+          },
+          {
+            "x": 949.8202469624042,
+            "y": 1000.0
+          }
+        ]
+      }
+    },
+    {
+      "trace_id": "major_local-rejected-0004",
+      "seed": {
+        "position": {
+          "x": 357.1428571428571,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": 0.20909323783956438,
+          "y": 0.9778957091069413
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": false,
+        "rejection_reason": "seed_too_close:63.6m",
+        "termination_reason": null,
+        "total_length": 0.0,
+        "point_count": 0,
+        "connection_count": 0,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": []
+      }
+    },
+    {
+      "trace_id": "major_local-rejected-0004",
+      "seed": {
+        "position": {
+          "x": 1128.5714285714284,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": 0.3572080865942341,
+          "y": -0.9340248299010505
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": false,
+        "rejection_reason": "seed_too_close:123.6m",
+        "termination_reason": null,
+        "total_length": 0.0,
+        "point_count": 0,
+        "connection_count": 0,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": []
+      }
+    },
+    {
+      "trace_id": "major_local-rejected-0004",
+      "seed": {
+        "position": {
+          "x": 614.2857142857142,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": 0.08844223488736805,
+          "y": -0.9960813074684854
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": false,
+        "rejection_reason": "seed_too_close:0.0m",
+        "termination_reason": null,
+        "total_length": 0.0,
+        "point_count": 0,
+        "connection_count": 0,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": []
+      }
+    },
+    {
+      "trace_id": "major_local-rejected-0004",
+      "seed": {
+        "position": {
+          "x": 1642.8571428571427,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": 0.1287996206288496,
+          "y": -0.9916706397417766
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": false,
+        "rejection_reason": "seed_too_close:0.0m",
+        "termination_reason": null,
+        "total_length": 0.0,
+        "point_count": 0,
+        "connection_count": 0,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": []
+      }
+    },
+    {
+      "trace_id": "major_local-rejected-0004",
+      "seed": {
+        "position": {
+          "x": 1128.5714285714284,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": -0.5280051742780186,
+          "y": 0.8492411529922695
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": false,
+        "rejection_reason": "seed_too_close:123.6m",
+        "termination_reason": null,
+        "total_length": 0.0,
+        "point_count": 0,
+        "connection_count": 0,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": []
+      }
+    },
+    {
+      "trace_id": "major_local-rejected-0004",
+      "seed": {
+        "position": {
+          "x": 357.1428571428571,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": -0.49895570333112144,
+          "y": -0.8666274898209416
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": false,
+        "rejection_reason": "seed_too_close:63.6m",
+        "termination_reason": null,
+        "total_length": 0.0,
+        "point_count": 0,
+        "connection_count": 0,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": []
+      }
+    },
+    {
+      "trace_id": "major_local-rejected-0004",
+      "seed": {
+        "position": {
+          "x": 871.4285714285713,
+          "y": 1000.0
+        },
+        "kind": "arterial_portal",
+        "direction": {
+          "x": -0.8763317885538273,
+          "y": 0.48170799907210393
+        },
+        "depth": 0,
+        "must_attach_arterial": false,
+        "arterial_attach_budget_steps": 11,
+        "riverfront_bias_steps": 0
+      },
+      "outcome": {
+        "accepted": false,
+        "rejection_reason": "seed_too_close:0.0m",
+        "termination_reason": null,
+        "total_length": 0.0,
+        "point_count": 0,
+        "connection_count": 0,
+        "culdesac": false,
+        "arterial_t_attached": false,
+        "network_attach_fallback": false,
+        "failed_arterial_attach": false
+      },
+      "config": null,
+      "steps": [],
+      "geometry": {
+        "points": []
+      }
+    }
+  ],
+  "config": {
+    "probe_step_m": 24.0,
+    "seed_spacing_m": 260.0,
+    "max_trace_len_m": 500.0,
+    "min_trace_len_m": 100.0,
+    "turn_limit_deg": 38.0,
+    "branch_prob": 0.35,
+    "continue_prob": 0.8,
+    "culdesac_prob": 0.18,
+    "max_queue_size": 2000,
+    "max_segments": 1200,
+    "max_arterial_distance_m": 800.0,
+    "depth_decay_power": 1.5,
+    "slope_straight_threshold_deg": 5.0,
+    "slope_serpentine_threshold_deg": 15.0,
+    "slope_hard_limit_deg": 22.0,
+    "contour_follow_weight": 0.9,
+    "arterial_align_weight": 0.6,
+    "hub_seek_weight": 0.25,
+    "river_snap_dist_m": 28.0,
+    "river_parallel_bias_weight": 1.0,
+    "river_avoid_weight": 1.2,
+    "river_setback_m": 18.0
+  },
+  "summary": {
+    "total_traces": 12,
+    "accepted_traces": 4,
+    "rejected_traces": 8,
+    "rejection_reasons": {
+      "seed_too_close:0.0m": 4,
+      "seed_too_close:63.6m": 2,
+      "seed_too_close:123.6m": 2
+    },
+    "termination_reasons": {
+      "stochastic_stop": 3,
+      "near_arterial_t": 1
+    },
+    "culdesac_count": 0,
+    "branch_enqueued_count": 0,
+    "riverfront_trace_count": 0,
+    "arterial_t_attach_count": 1,
+    "network_attach_fallback_count": 0,
+    "failed_arterial_attach_count": 0
+  }
+}

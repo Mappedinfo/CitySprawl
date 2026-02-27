@@ -336,3 +336,92 @@ export type GenerateJobStatusResponse = {
   last_log_seq: number;
   result_ready: boolean;
 };
+
+// Trace Log Types
+export type TraceLogFileInfo = {
+  filename: string;
+  path: string;
+  size_bytes: number;
+  modified_at: string;
+};
+
+export type TraceLogListResponse = {
+  logs: TraceLogFileInfo[];
+  log_dir: string;
+};
+
+export type TraceStepLog = {
+  step_index: number;
+  position: Point2D;
+  direction_before_blend: Point2D;
+  direction_after_blend: Point2D;
+  direction_final: Point2D;
+  slope_deg: number;
+  river_distance?: number | null;
+  river_tangent?: Point2D | null;
+  arterial_distance?: number | null;
+  arterial_tangent?: Point2D | null;
+  hub_vector?: Point2D | null;
+  turn_clamped: boolean;
+  riverfront_bias_active: boolean;
+  water_hit: boolean;
+  boundary_hit: boolean;
+};
+
+export type TraceLogSeed = {
+  position: Point2D;
+  kind: string;
+  direction: Point2D;
+  depth: number;
+  must_attach_arterial: boolean;
+  arterial_attach_budget_steps: number;
+  riverfront_bias_steps: number;
+};
+
+export type TraceLogOutcome = {
+  accepted: boolean;
+  rejection_reason?: string | null;
+  termination_reason?: string | null;
+  total_length: number;
+  point_count: number;
+  connection_count: number;
+  culdesac: boolean;
+  arterial_t_attached: boolean;
+  network_attach_fallback: boolean;
+  failed_arterial_attach: boolean;
+};
+
+export type TraceLog = {
+  trace_id: string;
+  seed: TraceLogSeed;
+  outcome: TraceLogOutcome;
+  config?: Record<string, unknown> | null;
+  steps: TraceStepLog[];
+  geometry: {
+    points: Point2D[];
+  };
+};
+
+export type TraceLogSummary = {
+  total_traces: number;
+  accepted_traces: number;
+  rejected_traces: number;
+  rejection_reasons: Record<string, number>;
+  termination_reasons: Record<string, number>;
+  total_length_m?: number;
+  avg_trace_length_m?: number;
+  [key: string]: unknown;
+};
+
+export type TraceLogContent = {
+  seed_count: number;
+  seeds: Array<{
+    position: Point2D;
+    seed_kind: string;
+    must_attach_arterial: boolean;
+    riverfront_bias_steps: number;
+  }>;
+  traces: TraceLog[];
+  config?: Record<string, unknown> | null;
+  summary?: TraceLogSummary | null;
+};

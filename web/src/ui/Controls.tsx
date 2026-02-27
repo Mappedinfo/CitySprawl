@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { GenerateConfig, PresetsResponse } from '../types/city';
 import {
   ALL_LAYER_KEYS,
@@ -9,6 +10,7 @@ import {
   type LayerKey,
   type LayerUiState,
 } from './layerCatalog';
+import { TraceLogViewer } from './TraceLogViewer';
 
 type Props = {
   config: GenerateConfig;
@@ -186,6 +188,8 @@ export function Controls({
   layerUiState,
   onLayerToggle,
 }: Props) {
+  const [showTraceLogs, setShowTraceLogs] = useState(false);
+
   warnIfLayerGroupCoverageMismatch(layers);
   const isGenerationPhase = Boolean(layerUiState?.isGenerationPhase);
   const reachedSet = new Set(layerUiState?.reachedLayerKeys ?? []);
@@ -438,6 +442,20 @@ export function Controls({
 
       <div className="button-row">
         <button onClick={onExport}>Export JSON</button>
+      </div>
+
+      <div className="section">
+        <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Trace Logs</span>
+          <button
+            className="trace-log-btn"
+            onClick={() => setShowTraceLogs(!showTraceLogs)}
+            style={{ width: 'auto', padding: '2px 8px', fontSize: '0.68rem' }}
+          >
+            {showTraceLogs ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        {showTraceLogs && <TraceLogViewer />}
       </div>
 
       <div className="section">

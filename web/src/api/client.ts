@@ -4,6 +4,8 @@ import type {
   GenerateJobStatusResponse,
   PresetsResponse,
   StagedCityResponse,
+  TraceLogListResponse,
+  TraceLogContent,
 } from '../types/city';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -79,6 +81,24 @@ export async function loadStagedJson(path: string): Promise<StagedCityResponse> 
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path }),
+  });
+  return parseJson(res);
+}
+
+// Trace Log API
+export async function fetchTraceLogs(): Promise<TraceLogListResponse> {
+  const res = await fetch(`${API_BASE}/api/v2/trace_logs`);
+  return parseJson(res);
+}
+
+export async function fetchTraceLog(filename: string): Promise<TraceLogContent> {
+  const res = await fetch(`${API_BASE}/api/v2/trace_logs/${encodeURIComponent(filename)}`);
+  return parseJson(res);
+}
+
+export async function deleteTraceLog(filename: string): Promise<{ status: string; filename: string }> {
+  const res = await fetch(`${API_BASE}/api/v2/trace_logs/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
   });
   return parseJson(res);
 }

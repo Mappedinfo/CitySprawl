@@ -485,7 +485,7 @@ def prune_short_dangles(
     kept: list[object] = []
     pruned = 0
     for e in edges:
-        if str(getattr(e, "road_class", "")) not in ("collector", "local"):
+        if str(getattr(e, "road_class", "")) not in ("major_local", "minor_local"):
             kept.append(e)
             continue
         if "culdesac" in _edge_flags(e) or "-cul" in str(getattr(e, "id", "")):

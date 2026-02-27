@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import heapq
+import json
 from math import hypot
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -12,6 +14,135 @@ from engine.roads.terrain_probe import TerrainProbe, TerrainProbeConfig
 
 
 StreamCallback = Callable[[Dict[str, Any]], None]
+
+
+@dataclass
+class TraceStepLog:
+    """Log entry for each step within a trace."""
+    step_index: int
+    position: tuple[float, float]
+    direction_before_blend: tuple[float, float]
+    direction_after_blend: tuple[float, float]
+    direction_final: tuple[float, float]
+    slope_deg: float
+    river_distance: Optional[float] = None
+    river_tangent: Optional[tuple[float, float]] = None
+    arterial_distance: Optional[float] = None
+    arterial_tangent: Optional[tuple[float, float]] = None
+    hub_vector: Optional[tuple[float, float]] = None
+    turn_clamped: bool = False
+    riverfront_bias_active: bool = False
+    water_hit: bool = False
+    boundary_hit: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "step_index": self.step_index,
+            "position": {"x": self.position[0], "y": self.position[1]},
+            "direction_before_blend": {"x": self.direction_before_blend[0], "y": self.direction_before_blend[1]},
+            "direction_after_blend": {"x": self.direction_after_blend[0], "y": self.direction_after_blend[1]},
+            "direction_final": {"x": self.direction_final[0], "y": self.direction_final[1]},
+            "slope_deg": self.slope_deg,
+            "river_distance": self.river_distance,
+            "river_tangent": {"x": self.river_tangent[0], "y": self.river_tangent[1]} if self.river_tangent else None,
+            "arterial_distance": self.arterial_distance,
+            "arterial_tangent": {"x": self.arterial_tangent[0], "y": self.arterial_tangent[1]} if self.arterial_tangent else None,
+            "hub_vector": {"x": self.hub_vector[0], "y": self.hub_vector[1]} if self.hub_vector else None,
+            "turn_clamped": self.turn_clamped,
+            "riverfront_bias_active": self.riverfront_bias_active,
+            "water_hit": self.water_hit,
+            "boundary_hit": self.boundary_hit,
+        }
+
+
+@dataclass
+class TraceLog:
+    """Complete log entry for a major_local road trace."""
+    trace_id: str
+    seed_position: tuple[float, float]
+    seed_kind: str
+    seed_direction: tuple[float, float]
+    depth: int
+    must_attach_arterial: bool
+    arterial_attach_budget_steps: int
+    riverfront_bias_steps: int
+    
+    # Final outcome
+    accepted: bool
+    rejection_reason: Optional[str] = None
+    termination_reason: Optional[str] = None
+    total_length: float = 0.0
+    point_count: int = 0
+    connection_count: int = 0
+    culdesac: bool = False
+    arterial_t_attached: bool = False
+    network_attach_fallback: bool = False
+    failed_arterial_attach: bool = False
+    
+    # Configuration parameters used
+    config: Optional[dict] = None
+    
+    # Detailed step logs
+    steps: list = field(default_factory=list)
+    
+    # Final geometry
+    points: Optional[list] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "trace_id": self.trace_id,
+            "seed": {
+                "position": {"x": self.seed_position[0], "y": self.seed_position[1]},
+                "kind": self.seed_kind,
+                "direction": {"x": self.seed_direction[0], "y": self.seed_direction[1]},
+                "depth": self.depth,
+                "must_attach_arterial": self.must_attach_arterial,
+                "arterial_attach_budget_steps": self.arterial_attach_budget_steps,
+                "riverfront_bias_steps": self.riverfront_bias_steps,
+            },
+            "outcome": {
+                "accepted": self.accepted,
+                "rejection_reason": self.rejection_reason,
+                "termination_reason": self.termination_reason,
+                "total_length": self.total_length,
+                "point_count": self.point_count,
+                "connection_count": self.connection_count,
+                "culdesac": self.culdesac,
+                "arterial_t_attached": self.arterial_t_attached,
+                "network_attach_fallback": self.network_attach_fallback,
+                "failed_arterial_attach": self.failed_arterial_attach,
+            },
+            "config": self.config,
+            "steps": [s.to_dict() if hasattr(s, "to_dict") else s for s in self.steps],
+            "geometry": {
+                "points": [{"x": p[0], "y": p[1]} for p in (self.points or [])],
+            },
+        }
+
+
+@dataclass
+class MajorLocalGenerationLog:
+    """Complete log for a major_local road generation session."""
+    seed_count: int = 0
+    seeds: list = field(default_factory=list)
+    traces: list = field(default_factory=list)
+    config: Optional[dict] = None
+    summary: Optional[dict] = None
+    
+    def to_dict(self) -> dict:
+        return {
+            "seed_count": self.seed_count,
+            "seeds": self.seeds,
+            "traces": [t.to_dict() if hasattr(t, "to_dict") else t for t in self.traces],
+            "config": self.config,
+            "summary": self.summary,
+        }
+    
+    def save_to_file(self, path: Path) -> None:
+        """Save log to JSON file."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
 
 
 def _emit_stream_event(stream_cb: Optional[StreamCallback], event: Dict[str, Any]) -> None:
@@ -27,12 +158,12 @@ def _emit_stream_event(stream_cb: Optional[StreamCallback], event: Dict[str, Any
 @dataclass
 class ClassicMajorLocalConfig:
     classic_probe_step_m: float = 24.0
-    classic_seed_spacing_m: float = 260.0
-    classic_max_trace_len_m: float = 1800.0
-    classic_min_trace_len_m: float = 1000.0
+    classic_seed_spacing_m: float = 120.0
+    classic_max_trace_len_m: float = 5000.0
+    classic_min_trace_len_m: float = 200.0
     classic_turn_limit_deg: float = 38.0
-    classic_branch_prob: float = 0.35
-    classic_continue_prob: float = 0.80
+    classic_branch_prob: float = 1.0
+    classic_continue_prob: float = 1.0
     classic_culdesac_prob: float = 0.18
     classic_max_queue_size: int = 2000
     classic_max_segments: int = 1200
@@ -48,6 +179,12 @@ class ClassicMajorLocalConfig:
     river_parallel_bias_weight: float = 1.0
     river_avoid_weight: float = 1.2
     river_setback_m: float = 18.0
+    # Trace logging configuration
+    enable_trace_logging: bool = False
+    trace_log_step_details: bool = True
+    trace_log_output_path: Optional[str] = None
+    trace_log_include_rejected: bool = True
+    trace_log_max_traces: int = 0  # 0 = no limit
 
 
 @dataclass(order=True)
@@ -438,6 +575,92 @@ class ClassicRoadGenerator:
         self.arterial_t_attach_count = 0
         self.network_attach_fallback_count = 0
         self.failed_arterial_attach_count = 0
+        
+        # Trace logging
+        self.trace_logging_enabled = bool(cfg.enable_trace_logging)
+        self.log_step_details = bool(cfg.trace_log_step_details)
+        self.log_include_rejected = bool(cfg.trace_log_include_rejected)
+        self.log_max_traces = int(cfg.trace_log_max_traces)
+        self.generation_log: Optional[MajorLocalGenerationLog] = None
+        if self.trace_logging_enabled:
+            self.generation_log = MajorLocalGenerationLog(
+                config=self._extract_config_dict(),
+            )
+
+    def _extract_config_dict(self) -> dict:
+        """Extract config parameters as dict for logging."""
+        cfg = self.cfg
+        return {
+            "probe_step_m": cfg.classic_probe_step_m,
+            "seed_spacing_m": cfg.classic_seed_spacing_m,
+            "max_trace_len_m": cfg.classic_max_trace_len_m,
+            "min_trace_len_m": cfg.classic_min_trace_len_m,
+            "turn_limit_deg": cfg.classic_turn_limit_deg,
+            "branch_prob": cfg.classic_branch_prob,
+            "continue_prob": cfg.classic_continue_prob,
+            "culdesac_prob": cfg.classic_culdesac_prob,
+            "max_queue_size": cfg.classic_max_queue_size,
+            "max_segments": cfg.classic_max_segments,
+            "max_arterial_distance_m": cfg.classic_max_arterial_distance_m,
+            "depth_decay_power": cfg.classic_depth_decay_power,
+            "slope_straight_threshold_deg": cfg.slope_straight_threshold_deg,
+            "slope_serpentine_threshold_deg": cfg.slope_serpentine_threshold_deg,
+            "slope_hard_limit_deg": cfg.slope_hard_limit_deg,
+            "contour_follow_weight": cfg.contour_follow_weight,
+            "arterial_align_weight": cfg.arterial_align_weight,
+            "hub_seek_weight": cfg.hub_seek_weight,
+            "river_snap_dist_m": cfg.river_snap_dist_m,
+            "river_parallel_bias_weight": cfg.river_parallel_bias_weight,
+            "river_avoid_weight": cfg.river_avoid_weight,
+            "river_setback_m": cfg.river_setback_m,
+        }
+
+    def _log_rejected_trace(
+        self,
+        state: _QueueState,
+        rejection_reason: str,
+        termination_reason: Optional[str] = None,
+    ) -> None:
+        """Log a rejected trace attempt."""
+        if not self.trace_logging_enabled or self.generation_log is None:
+            return
+        if not self.log_include_rejected:
+            return
+        if self.log_max_traces > 0 and len(self.generation_log.traces) >= self.log_max_traces:
+            return
+
+        trace_log = TraceLog(
+            trace_id=f"major_local-rejected-{self.trace_count:04d}",
+            seed_position=(float(state.pos.x), float(state.pos.y)),
+            seed_kind=state.seed_kind,
+            seed_direction=(float(state.direction.x), float(state.direction.y)),
+            depth=state.depth,
+            must_attach_arterial=state.must_attach_arterial,
+            arterial_attach_budget_steps=state.arterial_attach_budget_steps,
+            riverfront_bias_steps=state.riverfront_bias_steps_remaining,
+            accepted=False,
+            rejection_reason=rejection_reason,
+            termination_reason=termination_reason,
+            total_length=0.0,
+            point_count=0,
+            connection_count=0,
+            culdesac=False,
+            arterial_t_attached=False,
+            network_attach_fallback=False,
+            failed_arterial_attach=False,
+            config=None,
+            steps=[],
+            points=None,
+        )
+        self.generation_log.traces.append(trace_log)
+
+    def _append_trace_log(self, trace_log: TraceLog) -> None:
+        """Append trace log with optional limit."""
+        if self.generation_log is None:
+            return
+        if self.log_max_traces > 0 and len(self.generation_log.traces) >= self.log_max_traces:
+            return
+        self.generation_log.traces.append(trace_log)
 
     def _blend(self, a: Vec2, b: Vec2, w_b: float) -> Vec2:
         if a.length() <= 1e-9:
@@ -620,6 +843,11 @@ class ClassicRoadGenerator:
         network_attach_fallback = False
         arterial_t_attached = False
 
+        # Trace logging initialization
+        trace_id = f"major_local-{self.trace_count:04d}"
+        step_logs: list[TraceStepLog] = [] if (self.trace_logging_enabled and self.log_step_details) else []
+        log_enabled = self.trace_logging_enabled
+
         if self.base_segments:
             d0, _ = _nearest_road_distance_and_projection(state.pos, self.base_segments)
             if d0 < junction_probe:
@@ -632,6 +860,9 @@ class ClassicRoadGenerator:
                 d = self.probe.choose_serpentine_direction(cur, prev_dir, step_m, rng=self.rng)
             else:
                 d = self.probe.adjust_direction_for_slope(cur, prev_dir, road_class="major_local")
+
+            # Save direction before blending for logging
+            d_before_blend = (float(d.x), float(d.y)) if log_enabled else (0.0, 0.0)
 
             # Classical local heuristics: river parallel bias + arterial alignment + weak hub seek.
             river_tan, river_dist = self.probe.nearest_river_bank_tangent(cur)
@@ -660,7 +891,13 @@ class ClassicRoadGenerator:
             if hub_vec is not None and total_len >= 1.0 * step_m:
                 d = self._blend(d, hub_vec, min(0.35, float(self.cfg.hub_seek_weight)))
 
+            # Save direction after blending for logging
+            d_after_blend = (float(d.x), float(d.y)) if log_enabled else (0.0, 0.0)
+            d_unclamped = d
+
             d = _clamp_turn(prev_dir, d, float(self.cfg.classic_turn_limit_deg))
+            turn_clamped = (d.x != d_unclamped.x or d.y != d_unclamped.y) if log_enabled else False
+            
             if d.length() <= 1e-9:
                 reason = "zero_dir"
                 break
@@ -668,6 +905,25 @@ class ClassicRoadGenerator:
             nxt = Vec2(cur.x + d.x * step_m, cur.y + d.y * step_m)
             if not (0.0 <= nxt.x <= self.extent_m and 0.0 <= nxt.y <= self.extent_m):
                 reason = "boundary"
+                # Log this step with boundary_hit flag
+                if step_logs is not None and len(step_logs) == 0 or (step_logs and step_i > 0):
+                    step_logs.append(TraceStepLog(
+                        step_index=step_i,
+                        position=(float(cur.x), float(cur.y)),
+                        direction_before_blend=d_before_blend,
+                        direction_after_blend=d_after_blend,
+                        direction_final=(float(d.x), float(d.y)),
+                        slope_deg=slope_deg,
+                        river_distance=river_dist if river_tan else None,
+                        river_tangent=(float(river_tan.x), float(river_tan.y)) if river_tan else None,
+                        arterial_distance=art_dist if art_tan else None,
+                        arterial_tangent=(float(art_tan.x), float(art_tan.y)) if art_tan else None,
+                        hub_vector=(float(hub_vec.x), float(hub_vec.y)) if hub_vec else None,
+                        turn_clamped=turn_clamped,
+                        riverfront_bias_active=(riverfront_bias_steps_remaining > 0),
+                        water_hit=False,
+                        boundary_hit=True,
+                    )) if step_logs is not None else None
                 break
 
             if self.probe.check_water_hit(nxt) or _point_in_forbidden_geom(nxt, self.forbidden_geom):
@@ -681,6 +937,25 @@ class ClassicRoadGenerator:
                     or _point_in_forbidden_geom(alt_nxt, self.forbidden_geom)
                 ):
                     reason = "river_blocked"
+                    # Log this step with water_hit flag
+                    if step_logs is not None:
+                        step_logs.append(TraceStepLog(
+                            step_index=step_i,
+                            position=(float(cur.x), float(cur.y)),
+                            direction_before_blend=d_before_blend,
+                            direction_after_blend=d_after_blend,
+                            direction_final=(float(d.x), float(d.y)),
+                            slope_deg=slope_deg,
+                            river_distance=river_dist if river_tan else None,
+                            river_tangent=(float(river_tan.x), float(river_tan.y)) if river_tan else None,
+                            arterial_distance=art_dist if art_tan else None,
+                            arterial_tangent=(float(art_tan.x), float(art_tan.y)) if art_tan else None,
+                            hub_vector=(float(hub_vec.x), float(hub_vec.y)) if hub_vec else None,
+                            turn_clamped=turn_clamped,
+                            riverfront_bias_active=(riverfront_bias_steps_remaining > 0),
+                            water_hit=True,
+                            boundary_hit=False,
+                        ))
                     break
                 d = alt_dir
                 nxt = alt_nxt
@@ -727,6 +1002,26 @@ class ClassicRoadGenerator:
             points.append(nxt)
             total_len += cur.distance_to(nxt)
             prev_dir = d
+
+            # Log this step
+            if step_logs is not None:
+                step_logs.append(TraceStepLog(
+                    step_index=step_i,
+                    position=(float(cur.x), float(cur.y)),
+                    direction_before_blend=d_before_blend,
+                    direction_after_blend=d_after_blend,
+                    direction_final=(float(d.x), float(d.y)),
+                    slope_deg=slope_deg,
+                    river_distance=river_dist if river_tan else None,
+                    river_tangent=(float(river_tan.x), float(river_tan.y)) if river_tan else None,
+                    arterial_distance=art_dist if art_tan else None,
+                    arterial_tangent=(float(art_tan.x), float(art_tan.y)) if art_tan else None,
+                    hub_vector=(float(hub_vec.x), float(hub_vec.y)) if hub_vec else None,
+                    turn_clamped=turn_clamped,
+                    riverfront_bias_active=(riverfront_bias_steps_remaining > 0),
+                    water_hit=False,
+                    boundary_hit=False,
+                ))
 
             # Turtle step streaming event: emit growing polyline each step
             _emit_stream_event(self.stream_cb, {
@@ -778,10 +1073,41 @@ class ClassicRoadGenerator:
         if len(points) >= 2 and points[-1].distance_to(points[-2]) <= 1e-6:
             points = points[:-1]
 
+        # Helper function to create and log TraceLog for rejected traces
+        def _log_trace_rejection(rejection_reason: str) -> None:
+            if not log_enabled or self.generation_log is None:
+                return
+            trace_log = TraceLog(
+                trace_id=trace_id,
+                seed_position=(float(state.pos.x), float(state.pos.y)),
+                seed_kind=state.seed_kind,
+                seed_direction=(float(state.direction.x), float(state.direction.y)),
+                depth=state.depth,
+                must_attach_arterial=state.must_attach_arterial,
+                arterial_attach_budget_steps=state.arterial_attach_budget_steps,
+                riverfront_bias_steps=state.riverfront_bias_steps_remaining,
+                accepted=False,
+                rejection_reason=rejection_reason,
+                termination_reason=reason,
+                total_length=total_len,
+                point_count=len(points),
+                connection_count=connected,
+                culdesac=culdesac,
+                arterial_t_attached=arterial_t_attached,
+                network_attach_fallback=network_attach_fallback,
+                failed_arterial_attach=False,
+                config=None,
+                steps=step_logs if self.log_step_details else [],
+                points=[(float(p.x), float(p.y)) for p in points] if points else None,
+            )
+            self._append_trace_log(trace_log)
+
         if len(points) < 2:
+            _log_trace_rejection("too_few_points")
             return None
         length = _polyline_length(points)
         if length < float(self.cfg.classic_min_trace_len_m):
+            _log_trace_rejection(f"too_short:{length:.1f}m")
             return None
         # Require at least one connection to the pre-existing network (or snapped endpoint).
         if connected < 1:
@@ -796,8 +1122,37 @@ class ClassicRoadGenerator:
             if connected < 1 and d1 < max(junction_probe * 2.5, 28.0):
                 connected += 1
         if connected < 1:
+            _log_trace_rejection("not_connected")
             return None
         failed_arterial_attach = bool(state.must_attach_arterial) and not arterial_t_attached
+
+        # Log accepted trace
+        if log_enabled and self.generation_log is not None:
+            trace_log = TraceLog(
+                trace_id=trace_id,
+                seed_position=(float(state.pos.x), float(state.pos.y)),
+                seed_kind=state.seed_kind,
+                seed_direction=(float(state.direction.x), float(state.direction.y)),
+                depth=state.depth,
+                must_attach_arterial=state.must_attach_arterial,
+                arterial_attach_budget_steps=state.arterial_attach_budget_steps,
+                riverfront_bias_steps=state.riverfront_bias_steps_remaining,
+                accepted=True,
+                rejection_reason=None,
+                termination_reason=reason,
+                total_length=length,
+                point_count=len(points),
+                connection_count=connected,
+                culdesac=culdesac,
+                arterial_t_attached=arterial_t_attached,
+                network_attach_fallback=network_attach_fallback,
+                failed_arterial_attach=failed_arterial_attach,
+                config=None,
+                steps=step_logs if self.log_step_details else [],
+                points=[(float(p.x), float(p.y)) for p in points],
+            )
+            self._append_trace_log(trace_log)
+
         return _Trace(
             points=points,
             connection_count=int(connected),
@@ -818,16 +1173,48 @@ class ClassicRoadGenerator:
         notes.append(f"classic_seed_riverfront:{riverfront_seed_count}")
         stop_reasons: dict[str, int] = {}
 
+        # Log seeds if trace logging is enabled
+        if self.trace_logging_enabled and self.generation_log is not None:
+            self.generation_log.seed_count = len(seeds)
+            self.generation_log.seeds = [
+                {
+                    "position": {"x": float(s.pos.x), "y": float(s.pos.y)},
+                    "seed_kind": s.seed_kind,
+                    "must_attach_arterial": s.must_attach_arterial,
+                    "riverfront_bias_steps": s.riverfront_bias_steps,
+                }
+                for s in seeds
+            ]
+
         while self.queue and len(traces) < int(self.cfg.classic_max_segments):
             state = heapq.heappop(self.queue)
             if self.probe.check_water_hit(state.pos):
+                # Log rejected trace due to water hit
+                self._log_rejected_trace(state, "seed_water_hit")
                 continue
             if self.runtime_segments:
-                d_seed, _ = _nearest_road_distance_and_projection(state.pos, self.runtime_segments)
+                d_seed, nearest_proj = _nearest_road_distance_and_projection(state.pos, self.runtime_segments)
                 if d_seed < 0.6 * float(self.cfg.classic_seed_spacing_m):
-                    continue
+                    # Check if direction is roughly opposite to nearest segment
+                    # If so, allow growth (forms a road passing through the seed point)
+                    allow_opposite = False
+                    if nearest_proj is not None and d_seed < 0.1 * float(self.cfg.classic_seed_spacing_m):
+                        # Find tangent of nearest segment
+                        nearest_tan, _ = _nearest_segment_tangent(state.pos, self.runtime_segments)
+                        if nearest_tan is not None:
+                            # Check if state direction is roughly opposite to or aligned with segment tangent
+                            # (meaning it would extend the road, not create a parallel one)
+                            dot = abs(state.direction.x * nearest_tan.x + state.direction.y * nearest_tan.y)
+                            # dot close to 1 means parallel/anti-parallel (good for extending)
+                            if dot > 0.7:  # within ~45 degrees of segment direction
+                                allow_opposite = True
+                    if not allow_opposite:
+                        # Log rejected trace due to seed too close
+                        self._log_rejected_trace(state, f"seed_too_close:{d_seed:.1f}m")
+                        continue
             tr = self._trace(state)
             if tr is None:
+                # Note: _trace() already logs rejected traces internally
                 continue
             traces.append(tr.points)
             cul_flags.append(bool(tr.culdesac))
@@ -872,6 +1259,38 @@ class ClassicRoadGenerator:
             "major_local_classic_network_attach_fallback_count": float(self.network_attach_fallback_count),
             "major_local_classic_failed_arterial_attach_count": float(self.failed_arterial_attach_count),
         }
+
+        # Generate summary for trace logging
+        if self.trace_logging_enabled and self.generation_log is not None:
+            # Count rejection and termination reasons
+            rejection_counts: dict[str, int] = {}
+            termination_counts: dict[str, int] = {}
+            accepted_count = 0
+            rejected_count = 0
+            for trace_log in self.generation_log.traces:
+                if trace_log.accepted:
+                    accepted_count += 1
+                    if trace_log.termination_reason:
+                        termination_counts[trace_log.termination_reason] = termination_counts.get(trace_log.termination_reason, 0) + 1
+                else:
+                    rejected_count += 1
+                    if trace_log.rejection_reason:
+                        rejection_counts[trace_log.rejection_reason] = rejection_counts.get(trace_log.rejection_reason, 0) + 1
+
+            self.generation_log.summary = {
+                "total_traces": len(self.generation_log.traces),
+                "accepted_traces": accepted_count,
+                "rejected_traces": rejected_count,
+                "rejection_reasons": rejection_counts,
+                "termination_reasons": termination_counts,
+                "culdesac_count": self.culdesac_count,
+                "branch_enqueued_count": self.branch_enqueued,
+                "riverfront_trace_count": self.riverfront_trace_count,
+                "arterial_t_attach_count": self.arterial_t_attach_count,
+                "network_attach_fallback_count": self.network_attach_fallback_count,
+                "failed_arterial_attach_count": self.failed_arterial_attach_count,
+            }
+
         return traces, cul_flags, notes, numeric
 
 
@@ -890,7 +1309,16 @@ def generate_classic_major_local(
     cfg: ClassicMajorLocalConfig,
     seed: int,
     stream_cb: Optional[StreamCallback] = None,
-) -> tuple[list[list[Vec2]], list[bool], list[str], dict[str, float]]:
+) -> tuple[list[list[Vec2]], list[bool], list[str], dict[str, float], Optional[MajorLocalGenerationLog]]:
+    """Generate major_local roads using classic growth algorithm.
+    
+    Returns:
+        traces: List of polylines (road traces)
+        cul_flags: List of culdesac flags per trace
+        notes: List of textual notes/metrics
+        numeric: Dict of numeric metrics
+        generation_log: Detailed trace log (if enable_trace_logging=True)
+    """
     probe = TerrainProbe(
         extent_m=float(extent_m),
         height=height,
@@ -920,4 +1348,5 @@ def generate_classic_major_local(
         seed=int(seed),
         stream_cb=stream_cb,
     )
-    return gen.grow()
+    traces, cul_flags, notes, numeric = gen.grow()
+    return traces, cul_flags, notes, numeric, gen.generation_log

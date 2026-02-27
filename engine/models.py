@@ -91,12 +91,12 @@ class RoadsConfig(StrictModel):
     max_local_block_area_m2: float = Field(default=180000.0, ge=100.0)
     collector_generator: str = Field(default="turtle_flow", min_length=1)
     classic_probe_step_m: float = Field(default=24.0, gt=1.0, le=500.0)
-    classic_seed_spacing_m: float = Field(default=260.0, gt=5.0, le=5000.0)
-    classic_max_trace_len_m: float = Field(default=1800.0, gt=10.0, le=50000.0)
-    classic_min_trace_len_m: float = Field(default=1000.0, gt=1.0, le=5000.0)
+    classic_seed_spacing_m: float = Field(default=120.0, gt=5.0, le=5000.0)
+    classic_max_trace_len_m: float = Field(default=5000.0, gt=10.0, le=50000.0)
+    classic_min_trace_len_m: float = Field(default=200.0, gt=1.0, le=5000.0)
     classic_turn_limit_deg: float = Field(default=38.0, ge=1.0, le=180.0)
-    classic_branch_prob: float = Field(default=0.35, ge=0.0, le=1.0)
-    classic_continue_prob: float = Field(default=0.80, ge=0.0, le=1.0)
+    classic_branch_prob: float = Field(default=1.0, ge=0.0, le=1.0)
+    classic_continue_prob: float = Field(default=1.0, ge=0.0, le=1.0)
     classic_culdesac_prob: float = Field(default=0.18, ge=0.0, le=1.0)
     classic_max_queue_size: int = Field(default=2000, ge=10, le=100000)
     classic_max_segments: int = Field(default=1200, ge=1, le=100000)
@@ -114,7 +114,7 @@ class RoadsConfig(StrictModel):
     intersection_snap_radius_m: float = Field(default=12.0, ge=0.0, le=500.0)
     intersection_t_junction_radius_m: float = Field(default=18.0, ge=0.0, le=500.0)
     intersection_split_tolerance_m: float = Field(default=1.5, ge=0.0, le=100.0)
-    min_dangle_length_m: float = Field(default=35.0, ge=0.0, le=1000.0)
+    min_dangle_length_m: float = Field(default=15.0, ge=0.0, le=1000.0)
     syntax_enable: bool = True
     syntax_choice_radius_hops: int = Field(default=10, ge=1, le=256)
     syntax_prune_low_choice_collectors: bool = False
@@ -125,6 +125,12 @@ class RoadsConfig(StrictModel):
     local_sub_branch_interval_max_m: float = Field(default=400.0, gt=10.0, le=5000.0)
     local_sub_branch_max_depth: int = Field(default=2, ge=0, le=10)
     local_sub_branch_connector_seek_radius_m: float = Field(default=1200.0, gt=10.0, le=10000.0)
+    # Major Local trace logging configuration
+    major_local_enable_trace_logging: bool = False
+    major_local_trace_log_step_details: bool = True
+    major_local_trace_log_output_path: Optional[str] = None
+    major_local_trace_log_include_rejected: bool = True
+    major_local_trace_log_max_traces: int = Field(default=0, ge=0)
 
 
 class QualityConfig(StrictModel):
